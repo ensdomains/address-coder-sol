@@ -9,6 +9,11 @@ import {CashAddr} from "./utils/CashAddr.sol";
 /// @dev `decode` accepts CashAddr ("bitcoincash:q...", "bitcoincash:p...", prefix optional, either case)
 ///      and legacy Base58Check ("1...", "3..."). `encode` always emits CashAddr with the prefix.
 ///      Only 20-byte P2PKH / P2SH are supported (not P2SH32).
+///
+/// References:
+/// - CashAddr: https://github.com/bitcoincashorg/bitcoincash.org/blob/master/spec/cashaddr.md
+/// - P2SH32 (unsupported): https://gitlab.com/0353F40E/p2sh32
+/// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/coin/bch.ts
 library BitcoinCashCoder {
     error UnrecognisedAddressFormat();
 
@@ -19,21 +24,22 @@ library BitcoinCashCoder {
     uint8 internal constant P2SH_VERSION = 0x05;
 
     /// @notice scriptPubKey -> "bitcoincash:..." address string.
-    function encode(bytes memory script) internal pure returns (string memory) {
+    /// @return ok False if `script` is not P2PKH or P2SH.
+    function encode(bytes memory script) internal pure returns (bool ok, string memory addr) {
         uint256 n = script.length;
         if (
             n == 25 && script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88
                 && script[24] == 0xac
         ) {
-            return CashAddr.encode(PREFIX, 0, _slice20(script, 3));
+            return (true, CashAddr.encode(PREFIX, 0, _slice20(script, 3)));
         }
         if (n == 23 && script[0] == 0xa9 && script[1] == 0x14 && script[22] == 0x87) {
-            return CashAddr.encode(PREFIX, 1, _slice20(script, 2));
+            return (true, CashAddr.encode(PREFIX, 1, _slice20(script, 2)));
         }
-        revert UnrecognisedAddressFormat();
+        return (false, "");
     }
 
-    /// @notice Address string -> scriptPubKey.
+    /// @notice Address string -> scriptPubKey. Reverts on invalid input.
     function decode(string memory addr) internal pure returns (bytes memory) {
         bytes memory b = bytes(addr);
         if (b.length != 0 && (b[0] == "1" || b[0] == "3")) {

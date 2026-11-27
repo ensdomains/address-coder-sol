@@ -7,6 +7,11 @@ import {Base32} from "./utils/Base32.sol";
 /// @notice Stellar (coinType 148) account address <-> 32-byte ed25519 public key,
 ///         as used by ENS `addr(node, 148)`.
 /// @dev StrKey: base32(0x30 ‖ key ‖ crc16-xmodem LE), i.e. "G..." (56 chars).
+///
+/// References:
+/// - SEP-23 (StrKey): https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0023.md
+/// - RFC 4648 (base32): https://datatracker.ietf.org/doc/html/rfc4648#section-6
+/// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/coin/xlm.ts
 library StellarCoder {
     error UnrecognisedAddressFormat();
 
@@ -15,19 +20,18 @@ library StellarCoder {
     uint8 internal constant VERSION = 0x30; // 6 << 3, account ID
 
     /// @notice 32-byte public key -> "G..." address string.
-    function encode(bytes memory pubkey) internal pure returns (string memory) {
-        if (pubkey.length != 32) revert UnrecognisedAddressFormat();
-        bytes memory payload = abi.encodePacked(VERSION, pubkey);
-        uint256 crc = _crc16(payload, 33);
-        return Base32.encode(abi.encodePacked(payload, uint8(crc), uint8(crc >> 8)));
+    /// @return ok False if `pubkey` is not 32 bytes.
+    function encode(bytes memory pubkey) internal pure returns (bool ok, string memory addr) {
+        if (pubkey.length != 32) return (false, "");
+        return (true, _encode(pubkey));
     }
 
-    /// @notice 32-byte public key -> "G..." address string.
+    /// @notice 32-byte public key -> "G..." address string. Always succeeds.
     function encode(bytes32 pubkey) internal pure returns (string memory) {
-        return encode(abi.encodePacked(pubkey));
+        return _encode(abi.encodePacked(pubkey));
     }
 
-    /// @notice "G..." address string -> 32-byte public key.
+    /// @notice "G..." address string -> 32-byte public key. Reverts on invalid input.
     function decode(string memory addr) internal pure returns (bytes memory pubkey) {
         if (bytes(addr).length != 56) revert UnrecognisedAddressFormat();
         bytes memory raw = Base32.decode(addr);
@@ -38,6 +42,12 @@ library StellarCoder {
         for (uint256 i; i < 32; ++i) {
             pubkey[i] = raw[i + 1];
         }
+    }
+
+    function _encode(bytes memory pubkey) private pure returns (string memory) {
+        bytes memory payload = abi.encodePacked(VERSION, pubkey);
+        uint256 crc = _crc16(payload, 33);
+        return Base32.encode(abi.encodePacked(payload, uint8(crc), uint8(crc >> 8)));
     }
 
     /// @dev CRC-16/XMODEM (poly 0x1021, init 0) over `data[:n]`.

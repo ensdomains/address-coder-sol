@@ -4,6 +4,9 @@ pragma solidity ^0.8.24;
 /// @title Base32
 /// @notice Unpadded RFC 4648 base32 ("A-Z2-7").
 /// @dev All functions are `internal`, so only the ones you call end up in your bytecode.
+///
+/// References:
+/// - RFC 4648 section 6: https://datatracker.ietf.org/doc/html/rfc4648#section-6
 library Base32 {
     error InvalidBase32();
 

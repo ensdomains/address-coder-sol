@@ -7,6 +7,7 @@ human-readable chain addresses to and from the binary form ENS stores in `addr(n
 
 | Library            | coinType | Address                                  | Bytes                                     |
 | ------------------ | -------- | ---------------------------------------- | ----------------------------------------- |
+| `EvmCoder`         | 60, `0x80000000 \| chainId`³ | `0x…` (EIP-55 checksum)    | 20-byte address                           |
 | `BitcoinCoder`     | 0        | `1…` / `3…` / `bc1…`                     | scriptPubKey                              |
 | `LitecoinCoder`    | 2        | `L…` / `M…` / `3…`¹ / `ltc1…`            | scriptPubKey                              |
 | `DogecoinCoder`    | 3        | `D…` / `9…` / `A…`                       | scriptPubKey                              |
@@ -21,18 +22,45 @@ human-readable chain addresses to and from the binary form ENS stores in `addr(n
 | `CardanoCoder`     | 1815     | `addr1…` (Shelley), `Ae2…` / `Ddz…` (Byron) | CIP-19 address bytes / Byron CBOR address |
 | `ChiaCoder`        | 8444     | `xch1…` (bech32m)                        | 32-byte puzzle hash                       |
 
-Each library has `encode(bytes) → string`, `decode(string) → bytes` and a `COIN_TYPE` constant.
+Every library has the same shape, plus a `COIN_TYPE` constant:
+
+```solidity
+function encode(bytes memory data) internal pure returns (bool ok, string memory addr); // never reverts
+function decode(string memory addr) internal pure returns (bytes memory data);         // reverts on bad input
+```
+
+`encode` turns stored bytes, which may be malformed, into a string, so it reports failure as
+`(false, "")` instead of reverting. That makes it safe in view and rendering paths. `decode` takes
+user input, so it reverts with a custom error. Coders whose input has a fixed size (Solana, Chia,
+Stellar, EVM) also offer an infallible `encode(bytes32)` / `encode(address)` that returns a plain
+`string`. Each coder's NatSpec lists the specs it implements.
 
 ¹ Decode only: `encode` emits the canonical form (`M…` for LTC P2SH, `bitcoincash:…` for BCH). BCH
   also accepts CashAddr without the `bitcoincash:` prefix.<br>
 ² `view`, not `pure`: the SS58 checksum uses the EIP-152 BLAKE2b precompile (`0x09`), which some
-  L2s / zkEVMs don't implement.
+  L2s / zkEVMs don't implement. Where it's missing, `encode` returns `(false, "")` and `decode` reverts.<br>
+³ ENSIP-11 EVM chains. All of them use the same EIP-55 format as ETH.
+
+### `AddressCoder`
+
+One entry point that dispatches by coinType:
+
+```solidity
+import {AddressCoder} from "address-coder-sol/AddressCoder.sol";
+
+(bool ok, string memory addr) = AddressCoder.encode(coinType, data); // false for unsupported / invalid
+bytes memory data = AddressCoder.decode(coinType, addr);             // reverts UnsupportedCoinType / coder error
+bool supported = AddressCoder.isSupported(coinType);
+```
+
+`AddressCoder` compiles in every coder you reach through it (about 8 KB each for `encode` and `decode`). If you
+only need a few chains, import their coders directly.
 
 ```solidity
 import {BitcoinCoder} from "address-coder-sol/BitcoinCoder.sol";
 
-bytes memory script = BitcoinCoder.decode("bc1q...");   // 0x0014...
-string memory addr  = BitcoinCoder.encode(script);
+bytes memory script = BitcoinCoder.decode("bc1q...");        // 0x0014...
+(bool ok, string memory addr) = BitcoinCoder.encode(script);
 ```
 
 Each coder is its own library of `internal` functions, so only what you call is compiled into your
@@ -63,6 +91,7 @@ addresses:
 - **BTC / DOGE / TRX / XRP Base58Check:** payloads of the wrong length or with the wrong version byte.
 - **Chia:** addresses that don't decode to exactly 32 bytes.
 - **Cosmos:** empty account bytes.
+- **EVM:** only 20-byte inputs encode. The reference hex-encodes any length.
 - **Stellar:** keys that aren't 32 bytes.
 - **Cardano:** Shelley addresses that aren't mainnet or that break CIP-19 lengths, reward addresses
   under the `addr` prefix, and Byron addresses whose inner bytes aren't a CBOR address (`0x83…`).

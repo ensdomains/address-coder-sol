@@ -10,6 +10,11 @@ import {Bech32} from "./Bech32.sol";
 /// @dev Mirrors `createBitcoinEncoder` / `createBitcoinDecoder` from ensdomains/address-encoder.
 ///      Chains without SegWit should call `encodeLegacy` / `decodeLegacy` directly, so the
 ///      bech32 code is never compiled in.
+///
+/// References:
+/// - Standard scripts: https://en.bitcoin.it/wiki/Script#Standard_Transaction_to_Bitcoin_address_(pay-to-pubkey-hash)
+/// - BIP-13 (P2SH addresses): https://github.com/bitcoin/bips/blob/master/bip-0013.mediawiki
+/// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/utils/bitcoin.ts
 library BitcoinLike {
     error UnrecognisedAddressFormat();
 
@@ -37,19 +42,22 @@ library BitcoinLike {
     }
 
     /// @notice scriptPubKey bytes -> address string (Base58Check or SegWit).
+    /// @return ok False if `script` is not P2PKH, P2SH or a valid SegWit output.
     function encode(bytes memory script, bytes memory hrp, uint8 p2pkhVersion, uint8 p2shVersion)
         internal
         pure
-        returns (string memory)
+        returns (bool ok, string memory addr)
     {
         uint256 n = script.length;
         uint8 op = n == 0 ? 0xff : uint8(script[0]);
         if ((op == 0 || (op >= 0x51 && op <= 0x60)) && n >= 2 && uint8(script[1]) == n - 2) {
+            uint256 version = op == 0 ? 0 : op - 0x50;
+            if (!Bech32.isValidWitnessProgram(version, n - 2)) return (false, "");
             bytes memory program = new bytes(n - 2);
             for (uint256 i; i < n - 2; ++i) {
                 program[i] = script[i + 2];
             }
-            return Bech32.encodeSegwit(hrp, op == 0 ? 0 : op - 0x50, program);
+            return (true, Bech32.encodeSegwit(hrp, version, program));
         }
         return encodeLegacy(script, p2pkhVersion, p2shVersion);
     }
@@ -81,24 +89,23 @@ library BitcoinLike {
     }
 
     /// @notice P2PKH / P2SH scriptPubKey bytes -> Base58Check address.
+    /// @return ok False if `script` is not P2PKH or P2SH.
     function encodeLegacy(bytes memory script, uint8 p2pkhVersion, uint8 p2shVersion)
         internal
         pure
-        returns (string memory)
+        returns (bool ok, string memory addr)
     {
         uint256 n = script.length;
-        if (n == 25) {
-            if (script[0] != 0x76 || script[1] != 0xa9 || script[2] != 0x14 || script[23] != 0x88 || script[24] != 0xac)
-            {
-                revert UnrecognisedAddressFormat();
-            }
-            return Base58.encodeCheck(abi.encodePacked(p2pkhVersion, _hash20(script, 3)));
+        if (
+            n == 25 && script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88
+                && script[24] == 0xac
+        ) {
+            return (true, Base58.encodeCheck(abi.encodePacked(p2pkhVersion, _hash20(script, 3))));
         }
-        if (n == 23) {
-            if (script[0] != 0xa9 || script[1] != 0x14 || script[22] != 0x87) revert UnrecognisedAddressFormat();
-            return Base58.encodeCheck(abi.encodePacked(p2shVersion, _hash20(script, 2)));
+        if (n == 23 && script[0] == 0xa9 && script[1] == 0x14 && script[22] == 0x87) {
+            return (true, Base58.encodeCheck(abi.encodePacked(p2shVersion, _hash20(script, 2))));
         }
-        revert UnrecognisedAddressFormat();
+        return (false, "");
     }
 
     function _hash20(bytes memory b, uint256 offset) private pure returns (bytes20 h) {

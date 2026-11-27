@@ -5,6 +5,9 @@ pragma solidity ^0.8.24;
 /// @notice CashAddr encoding (Bitcoin Cash): `prefix ‖ ":" ‖ base32(version ‖ hash) ‖ 40-bit checksum`.
 /// @dev All functions are `internal`, so only the ones you call end up in your bytecode.
 ///      `kind` is the address type from the version byte (0 = P2PKH, 1 = P2SH).
+///
+/// References:
+/// - CashAddr: https://github.com/bitcoincashorg/bitcoincash.org/blob/master/spec/cashaddr.md
 library CashAddr {
     error InvalidCashAddr();
 

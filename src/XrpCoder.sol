@@ -7,6 +7,11 @@ import {Base58} from "./utils/Base58.sol";
 /// @notice XRP Ledger (coinType 144) classic address <-> 21 bytes (0x00 ‖ 20-byte account ID),
 ///         as used by ENS `addr(node, 144)`.
 /// @dev Addresses are Base58Check with the XRP alphabet ("r..."). X-addresses are not supported.
+///
+/// References:
+/// - Addresses: https://xrpl.org/docs/concepts/accounts/addresses
+/// - Base58 encodings (XRP alphabet, type prefixes): https://xrpl.org/docs/references/protocol/data-types/base58-encodings
+/// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/coin/xrp.ts
 library XrpCoder {
     error UnrecognisedAddressFormat();
 
@@ -19,13 +24,14 @@ library XrpCoder {
     uint256 internal constant ALPHABET_REV_LO = 0x81f79d70b6996175bf3544d247f40fbce3262b6ffffffffffc8b5ba29547872;
     uint256 internal constant ALPHABET_REV_HI = 0xe78dc9d74cc203006e12cfebab10e71a5923885fffffffff;
 
-    /// @notice 0x00 ‖ 20-byte account ID -> "r..." address string.
-    function encode(bytes memory data) internal pure returns (string memory) {
-        if (data.length != 21 || uint8(data[0]) != VERSION) revert UnrecognisedAddressFormat();
-        return Base58.encodeCheck(data, _alphabet());
+    /// @notice 0x00 ‖ 20-byte account -> address string.
+    /// @return ok False if `data` is not 21 bytes starting with 0x00.
+    function encode(bytes memory data) internal pure returns (bool ok, string memory addr) {
+        if (data.length != 21 || uint8(data[0]) != VERSION) return (false, "");
+        return (true, Base58.encodeCheck(data, _alphabet()));
     }
 
-    /// @notice "r..." address string -> 0x00 ‖ 20-byte account ID.
+    /// @notice Address string -> 0x00 ‖ 20-byte account. Reverts on invalid input.
     function decode(string memory addr) internal pure returns (bytes memory data) {
         data = Base58.decodeCheck(addr, _alphabet());
         if (data.length != 21 || uint8(data[0]) != VERSION) revert UnrecognisedAddressFormat();

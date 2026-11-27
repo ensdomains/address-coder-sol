@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {AddressCoder} from "../src/AddressCoder.sol";
 import {BitcoinCoder} from "../src/BitcoinCoder.sol";
 import {LitecoinCoder} from "../src/LitecoinCoder.sol";
 import {DogecoinCoder} from "../src/DogecoinCoder.sol";
@@ -15,46 +16,18 @@ import {StellarCoder} from "../src/StellarCoder.sol";
 import {PolkadotCoder} from "../src/PolkadotCoder.sol";
 import {KusamaCoder} from "../src/KusamaCoder.sol";
 import {CardanoCoder} from "../src/CardanoCoder.sol";
+import {EvmCoder} from "../src/EvmCoder.sol";
 import {Base58} from "../src/utils/Base58.sol";
 import {Bech32} from "../src/utils/Bech32.sol";
-import {BitcoinLike} from "../src/utils/BitcoinLike.sol";
 
-/// @dev External wrappers, dispatched by coinType, so reverts surface as call failures.
+/// @dev External wrappers around AddressCoder, so reverts surface as call failures.
 contract Harness {
-    error UnknownCoin();
-
-    function encode(uint256 coinType, bytes memory b) external view returns (string memory) {
-        if (coinType == BitcoinCoder.COIN_TYPE) return BitcoinCoder.encode(b);
-        if (coinType == LitecoinCoder.COIN_TYPE) return LitecoinCoder.encode(b);
-        if (coinType == DogecoinCoder.COIN_TYPE) return DogecoinCoder.encode(b);
-        if (coinType == BitcoinCashCoder.COIN_TYPE) return BitcoinCashCoder.encode(b);
-        if (coinType == SolanaCoder.COIN_TYPE) return SolanaCoder.encode(b);
-        if (coinType == ChiaCoder.COIN_TYPE) return ChiaCoder.encode(b);
-        if (coinType == XrpCoder.COIN_TYPE) return XrpCoder.encode(b);
-        if (coinType == CosmosCoder.COIN_TYPE) return CosmosCoder.encode(b);
-        if (coinType == TronCoder.COIN_TYPE) return TronCoder.encode(b);
-        if (coinType == StellarCoder.COIN_TYPE) return StellarCoder.encode(b);
-        if (coinType == PolkadotCoder.COIN_TYPE) return PolkadotCoder.encode(b);
-        if (coinType == KusamaCoder.COIN_TYPE) return KusamaCoder.encode(b);
-        if (coinType == CardanoCoder.COIN_TYPE) return CardanoCoder.encode(b);
-        revert UnknownCoin();
+    function encode(uint256 coinType, bytes memory b) external view returns (bool, string memory) {
+        return AddressCoder.encode(coinType, b);
     }
 
     function decode(uint256 coinType, string memory s) external view returns (bytes memory) {
-        if (coinType == BitcoinCoder.COIN_TYPE) return BitcoinCoder.decode(s);
-        if (coinType == LitecoinCoder.COIN_TYPE) return LitecoinCoder.decode(s);
-        if (coinType == DogecoinCoder.COIN_TYPE) return DogecoinCoder.decode(s);
-        if (coinType == BitcoinCashCoder.COIN_TYPE) return BitcoinCashCoder.decode(s);
-        if (coinType == SolanaCoder.COIN_TYPE) return SolanaCoder.decode(s);
-        if (coinType == ChiaCoder.COIN_TYPE) return ChiaCoder.decode(s);
-        if (coinType == XrpCoder.COIN_TYPE) return XrpCoder.decode(s);
-        if (coinType == CosmosCoder.COIN_TYPE) return CosmosCoder.decode(s);
-        if (coinType == TronCoder.COIN_TYPE) return TronCoder.decode(s);
-        if (coinType == StellarCoder.COIN_TYPE) return StellarCoder.decode(s);
-        if (coinType == PolkadotCoder.COIN_TYPE) return PolkadotCoder.decode(s);
-        if (coinType == KusamaCoder.COIN_TYPE) return KusamaCoder.decode(s);
-        if (coinType == CardanoCoder.COIN_TYPE) return CardanoCoder.decode(s);
-        revert UnknownCoin();
+        return AddressCoder.decode(coinType, s);
     }
 }
 
@@ -121,6 +94,14 @@ contract CodersTest is Test {
         _checkCoin("ada");
     }
 
+    function test_eth_vectors() public {
+        _checkCoin("eth");
+    }
+
+    function test_op_vectors() public {
+        _checkCoin("op");
+    }
+
     function _checkCoin(string memory coin) internal {
         string memory k = string.concat(".", coin);
         uint256 coinType = vm.parseJsonUint(json, string.concat(k, ".coinType"));
@@ -130,7 +111,9 @@ contract CodersTest is Test {
         assertGt(addrs.length, 0);
         for (uint256 i; i < addrs.length; ++i) {
             assertEq(h.decode(coinType, addrs[i]), data[i], addrs[i]);
-            assertEq(h.encode(coinType, data[i]), addrs[i], addrs[i]);
+            (bool ok, string memory encoded) = h.encode(coinType, data[i]);
+            assertTrue(ok, addrs[i]);
+            assertEq(encoded, addrs[i], addrs[i]);
             if (_isBech32(addrs[i])) {
                 assertEq(h.decode(coinType, vm.toUppercase(addrs[i])), data[i], "uppercase");
             }
@@ -154,10 +137,13 @@ contract CodersTest is Test {
         data = vm.parseJsonBytesArray(json, string.concat(k, ".invalidBytes.bytes"));
         reasons = vm.parseJsonStringArray(json, string.concat(k, ".invalidBytes.reason"));
         for (uint256 i; i < data.length; ++i) {
-            try h.encode(coinType, data[i]) returns (string memory s) {
+            // encode must report failure, not revert
+            (bool ok, string memory s) = h.encode(coinType, data[i]);
+            if (ok) {
                 emit log_named_string(string.concat(coin, " encode accepted: ", reasons[i]), s);
                 fail();
-            } catch {}
+            }
+            assertEq(s, "");
         }
     }
 
@@ -185,18 +171,80 @@ contract CodersTest is Test {
         h.decode(0, "0A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa");
         vm.expectRevert(Base58.InvalidBase58Checksum.selector);
         h.decode(0, "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb");
-        vm.expectRevert(BitcoinLike.UnrecognisedAddressFormat.selector);
-        h.encode(0, hex"6a0401020304");
-        vm.expectRevert(Bech32.InvalidWitnessProgram.selector);
-        h.encode(0, hex"0015000000000000000000000000000000000000000000");
-        vm.expectRevert(BitcoinLike.UnrecognisedAddressFormat.selector);
-        h.encode(3, hex"00140000000000000000000000000000000000000000");
-        vm.expectRevert(SolanaCoder.UnrecognisedAddressFormat.selector);
-        h.encode(501, new bytes(31));
-        vm.expectRevert(ChiaCoder.UnrecognisedAddressFormat.selector);
-        h.encode(8444, new bytes(31));
         vm.expectRevert(Bech32.InvalidBech32.selector);
         h.decode(8444, "txch1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq2u30kz");
+        vm.expectRevert(EvmCoder.UnrecognisedAddressFormat.selector);
+        h.decode(60, "0xd0c18fb5267528929cf8E127b49F2996c1ABC41d"); // bad checksum
+        vm.expectRevert(abi.encodeWithSelector(AddressCoder.UnsupportedCoinType.selector, 1));
+        h.decode(1, "x");
+    }
+
+    function test_encodeFailures() public view {
+        bool ok;
+        (ok,) = h.encode(0, hex"6a0401020304"); // OP_RETURN
+        assertFalse(ok);
+        (ok,) = h.encode(0, hex"0015000000000000000000000000000000000000000000"); // v0, 21-byte program
+        assertFalse(ok);
+        (ok,) = h.encode(3, hex"00140000000000000000000000000000000000000000"); // segwit on doge
+        assertFalse(ok);
+        (ok,) = h.encode(118, new bytes(49)); // too long for 90 chars
+        assertFalse(ok);
+        (ok,) = h.encode(1, new bytes(20)); // unsupported coin type
+        assertFalse(ok);
+        (ok,) = h.encode(0x80000000 - 1, new bytes(20)); // just below the EVM range
+        assertFalse(ok);
+        (ok,) = h.encode(uint256(type(uint32).max) + 1, new bytes(20)); // above the EVM range
+        assertFalse(ok);
+    }
+
+    function test_isSupported() public pure {
+        uint256[16] memory supported =
+            [uint256(0), 2, 3, 60, 118, 144, 145, 148, 195, 354, 434, 501, 1815, 8444, 0x80000000, 0x8000000a];
+        for (uint256 i; i < supported.length; ++i) {
+            assertTrue(AddressCoder.isSupported(supported[i]));
+        }
+        assertFalse(AddressCoder.isSupported(1));
+        assertFalse(AddressCoder.isSupported(61));
+        assertFalse(AddressCoder.isSupported(uint256(type(uint32).max) + 1));
+    }
+
+    function test_eth_known() public pure {
+        // EIP-55 test vector
+        address a = 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed;
+        assertEq(EvmCoder.encode(a), "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed");
+        assertEq(EvmCoder.decode("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"), abi.encodePacked(a));
+        assertEq(EvmCoder.decode("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"), abi.encodePacked(a));
+    }
+
+    // ---------------------------------------------------------------- encode never reverts
+
+    /// @dev Arbitrary bytes, under every supported coin type, must give (false, "") or a valid address.
+    function testFuzz_encodeNeverReverts(uint256 pick, bytes memory data) public view {
+        uint256 coinType = _coinType(pick);
+        (bool ok, string memory s) = h.encode(coinType, data); // reverting fails the test
+        if (ok) assertEq(h.decode(coinType, s), data);
+        else assertEq(s, "");
+    }
+
+    /// @dev Same, but shaped like real inputs (common lengths, valid-looking leading bytes).
+    function testFuzz_encodeNeverReverts_shaped(uint256 pick, bytes memory data, uint8 lenPick, uint8 b0, uint8 b1)
+        public
+        view
+    {
+        uint8[12] memory lens = [0, 20, 21, 22, 23, 25, 29, 32, 33, 34, 57, 64];
+        data = _resize(data, lens[lenPick % lens.length]);
+        if (data.length > 0) data[0] = bytes1(b0);
+        if (data.length > 1) data[1] = bytes1(b1);
+        uint256 coinType = _coinType(pick);
+        (bool ok, string memory s) = h.encode(coinType, data);
+        if (ok) assertEq(h.decode(coinType, s), data);
+        else assertEq(s, "");
+    }
+
+    function _coinType(uint256 pick) internal pure returns (uint256) {
+        uint256[17] memory types =
+            [uint256(0), 2, 3, 60, 118, 144, 145, 148, 195, 354, 434, 501, 1815, 8444, 0x80000000, 0x8000000a, 1];
+        return pick < type(uint256).max / 2 ? types[pick % types.length] : pick; // sometimes a random coinType
     }
 
     // ---------------------------------------------------------------- round-trip fuzzing
@@ -227,14 +275,16 @@ contract CodersTest is Test {
 
     function testFuzz_btc_p2pkh(bytes20 hash) public pure {
         bytes memory s = abi.encodePacked(hex"76a914", hash, hex"88ac");
-        string memory a = BitcoinCoder.encode(s);
+        (bool ok, string memory a) = BitcoinCoder.encode(s);
+        assertTrue(ok);
         assertEq(bytes(a)[0], "1");
         assertEq(BitcoinCoder.decode(a), s);
     }
 
     function testFuzz_btc_p2sh(bytes20 hash) public pure {
         bytes memory s = abi.encodePacked(hex"a914", hash, hex"87");
-        string memory a = BitcoinCoder.encode(s);
+        (bool ok, string memory a) = BitcoinCoder.encode(s);
+        assertTrue(ok);
         assertEq(bytes(a)[0], "3");
         assertEq(BitcoinCoder.decode(a), s);
     }
@@ -247,21 +297,24 @@ contract CodersTest is Test {
             program = _resize(program, bound(program.length, 2, 40));
         }
         bytes memory s = abi.encodePacked(uint8(version == 0 ? 0 : version + 0x50), uint8(program.length), program);
-        string memory a = BitcoinCoder.encode(s);
+        (bool ok, string memory a) = BitcoinCoder.encode(s);
+        assertTrue(ok);
         assertTrue(_startsWith(a, "bc1"));
         assertEq(BitcoinCoder.decode(a), s);
     }
 
     function testFuzz_doge_p2pkh(bytes20 hash) public pure {
         bytes memory s = abi.encodePacked(hex"76a914", hash, hex"88ac");
-        string memory a = DogecoinCoder.encode(s);
+        (bool ok, string memory a) = DogecoinCoder.encode(s);
+        assertTrue(ok);
         assertEq(bytes(a)[0], "D");
         assertEq(DogecoinCoder.decode(a), s);
     }
 
     function testFuzz_doge_p2sh(bytes20 hash) public pure {
         bytes memory s = abi.encodePacked(hex"a914", hash, hex"87");
-        string memory a = DogecoinCoder.encode(s);
+        (bool ok, string memory a) = DogecoinCoder.encode(s);
+        assertTrue(ok);
         bytes1 c = bytes(a)[0];
         assertTrue(c == "9" || c == "A");
         assertEq(DogecoinCoder.decode(a), s);
@@ -270,7 +323,8 @@ contract CodersTest is Test {
     function testFuzz_ltc_roundtrip(bytes20 hash, bool p2sh) public pure {
         bytes memory s =
             p2sh ? abi.encodePacked(hex"a914", hash, hex"87") : abi.encodePacked(hex"76a914", hash, hex"88ac");
-        string memory a = LitecoinCoder.encode(s);
+        (bool ok, string memory a) = LitecoinCoder.encode(s);
+        assertTrue(ok);
         assertEq(bytes(a)[0], p2sh ? bytes1("M") : bytes1("L"));
         assertEq(LitecoinCoder.decode(a), s);
     }
@@ -283,31 +337,37 @@ contract CodersTest is Test {
     function testFuzz_bch_roundtrip(bytes20 hash, bool p2sh) public pure {
         bytes memory s =
             p2sh ? abi.encodePacked(hex"a914", hash, hex"87") : abi.encodePacked(hex"76a914", hash, hex"88ac");
-        string memory a = BitcoinCashCoder.encode(s);
+        (bool ok, string memory a) = BitcoinCashCoder.encode(s);
+        assertTrue(ok);
         assertTrue(_startsWith(a, p2sh ? "bitcoincash:p" : "bitcoincash:q"));
         assertEq(BitcoinCashCoder.decode(a), s);
         assertEq(BitcoinCashCoder.decode(vm.toUppercase(a)), s);
         // legacy base58 decodes to the same script
-        assertEq(BitcoinCashCoder.decode(BitcoinCoder.encode(s)), s);
+        (, string memory legacy) = BitcoinCoder.encode(s);
+        assertEq(BitcoinCashCoder.decode(legacy), s);
     }
 
     function testFuzz_xrp_roundtrip(bytes20 account) public pure {
         bytes memory d = abi.encodePacked(uint8(0), account);
-        string memory a = XrpCoder.encode(d);
+        (bool ok, string memory a) = XrpCoder.encode(d);
+        assertTrue(ok);
         assertEq(bytes(a)[0], "r");
         assertEq(XrpCoder.decode(a), d);
     }
 
     function testFuzz_trx_roundtrip(bytes20 account) public pure {
         bytes memory d = abi.encodePacked(uint8(0x41), account);
-        string memory a = TronCoder.encode(d);
+        (bool ok, string memory a) = TronCoder.encode(d);
+        assertTrue(ok);
         assertEq(bytes(a)[0], "T");
         assertEq(TronCoder.decode(a), d);
     }
 
     function testFuzz_atom_roundtrip(bytes memory account) public pure {
         account = _resize(account, bound(account.length, 1, 32));
-        assertEq(CosmosCoder.decode(CosmosCoder.encode(account)), account);
+        (bool ok, string memory a) = CosmosCoder.encode(account);
+        assertTrue(ok);
+        assertEq(CosmosCoder.decode(a), account);
     }
 
     function testFuzz_xlm_roundtrip(bytes32 key) public pure {
@@ -318,8 +378,12 @@ contract CodersTest is Test {
 
     function testFuzz_dot_roundtrip(bytes32 account) public view {
         bytes memory d = abi.encodePacked(account);
-        assertEq(PolkadotCoder.decode(PolkadotCoder.encode(d)), d);
-        assertEq(KusamaCoder.decode(KusamaCoder.encode(d)), d);
+        (bool ok, string memory a) = PolkadotCoder.encode(d);
+        assertTrue(ok);
+        assertEq(PolkadotCoder.decode(a), d);
+        (ok, a) = KusamaCoder.encode(d);
+        assertTrue(ok);
+        assertEq(KusamaCoder.decode(a), d);
     }
 
     function testFuzz_ada_shelley(bytes32 a, bytes32 b, uint8 kind) public pure {
@@ -328,14 +392,23 @@ contract CodersTest is Test {
         bytes memory d = kind <= 3
             ? abi.encodePacked(uint8((kind << 4) | 1), a, bytes24(b))
             : abi.encodePacked(uint8((kind << 4) | 1), bytes28(a));
-        string memory s = CardanoCoder.encode(d);
+        (bool ok, string memory s) = CardanoCoder.encode(d);
+        assertTrue(ok);
         assertTrue(_startsWith(s, "addr1"));
         assertEq(CardanoCoder.decode(s), d);
     }
 
+    function testFuzz_eth_roundtrip(address a, uint32 chainId) public pure {
+        string memory s = EvmCoder.encode(a);
+        assertEq(EvmCoder.decode(s), abi.encodePacked(a));
+        assertEq(EvmCoder.decode(vm.toLowercase(s)), abi.encodePacked(a));
+        assertTrue(EvmCoder.isEvmCoinType(EvmCoder.EVM_BIT | (chainId & 0x7fffffff)));
+    }
+
     function testFuzz_ada_byron(bytes28 root) public pure {
         bytes memory d = abi.encodePacked(hex"83581c", root, hex"a000"); // Icarus-style
-        string memory s = CardanoCoder.encode(d);
+        (bool ok, string memory s) = CardanoCoder.encode(d);
+        assertTrue(ok);
         assertTrue(_startsWith(s, "Ae2"));
         assertEq(CardanoCoder.decode(s), d);
     }

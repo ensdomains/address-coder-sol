@@ -4,6 +4,11 @@ pragma solidity ^0.8.24;
 /// @title Bech32
 /// @notice Bech32 (BIP-173) and bech32m (BIP-350) encoding, plus SegWit address helpers.
 /// @dev All functions are `internal`, so only the ones you call end up in your bytecode.
+///
+/// References:
+/// - BIP-173 (bech32): https://github.com/bitcoin/bips/blob/master/bip-0173.mediawiki
+/// - BIP-350 (bech32m): https://github.com/bitcoin/bips/blob/master/bip-0350.mediawiki
+/// - BIP-141 (witness programs): https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki
 library Bech32 {
     error InvalidBech32();
     error InvalidWitnessVersion();
@@ -87,6 +92,19 @@ library Bech32 {
         (version, program, chk) = _decode(hrp, addr, true, MAX_LENGTH);
         if (chk != (version == 0 ? BECH32_CONST : BECH32M_CONST)) revert InvalidBech32();
         _checkProgram(version, program.length);
+    }
+
+    // ------------------------------------------------------------------ validation helpers
+
+    /// @notice Length of the string `encode` produces for `dataLen` bytes under an `hrpLen`-char hrp.
+    ///         Compare it with the limit (90, or a custom one) before encoding, to avoid a revert.
+    function encodedLength(uint256 hrpLen, uint256 dataLen) internal pure returns (uint256) {
+        return hrpLen + 1 + (dataLen * 8 + 4) / 5 + 6;
+    }
+
+    /// @notice Whether witness `version` with a `len`-byte program is valid under BIP-141.
+    function isValidWitnessProgram(uint256 version, uint256 len) internal pure returns (bool) {
+        return version <= 16 && len >= 2 && len <= 40 && (version != 0 || len == 20 || len == 32);
     }
 
     // ------------------------------------------------------------------ internals
@@ -214,9 +232,7 @@ library Bech32 {
 
     function _checkProgram(uint256 version, uint256 len) private pure {
         if (version > 16) revert InvalidWitnessVersion();
-        if (len < 2 || len > 40 || (version == 0 && len != 20 && len != 32)) {
-            revert InvalidWitnessProgram();
-        }
+        if (!isValidWitnessProgram(version, len)) revert InvalidWitnessProgram();
     }
 
     function _hrpChecksum(bytes memory hrp) private pure returns (uint256 chk) {

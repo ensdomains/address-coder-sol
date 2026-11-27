@@ -8,14 +8,21 @@ import {Blake2b} from "./Blake2b.sol";
 /// @notice Substrate SS58 addresses for 32-byte account IDs:
 ///         base58(prefix ‖ account ‖ blake2b-512("SS58PRE" ‖ prefix ‖ account)[:2]).
 /// @dev Only single-byte network prefixes (0-63) are supported. `view` because of the blake2b precompile.
+///
+/// References:
+/// - SS58 address format: https://docs.substrate.io/reference/address-formats/
+/// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/utils/dot.ts
 library SS58 {
     error InvalidSS58();
 
     /// @notice 32-byte account ID -> SS58 address string for network `prefix`.
-    function encode(uint8 prefix, bytes memory account) internal view returns (string memory) {
-        if (prefix > 63 || account.length != 32) revert InvalidSS58();
+    /// @return ok False if `account` isn't 32 bytes, `prefix` > 63, or the blake2b precompile is unavailable.
+    function encode(uint8 prefix, bytes memory account) internal view returns (bool ok, string memory addr) {
+        if (prefix > 63 || account.length != 32) return (false, "");
         bytes memory body = abi.encodePacked(prefix, account);
-        return Base58.encode(abi.encodePacked(body, _checksum(body)));
+        (bool hashed, bytes32 lo,) = Blake2b.tryHash512(abi.encodePacked("SS58PRE", body));
+        if (!hashed) return (false, "");
+        return (true, Base58.encode(abi.encodePacked(body, bytes2(lo))));
     }
 
     /// @notice SS58 address string -> 32-byte account ID, requiring network `prefix`.

@@ -10,6 +10,10 @@ pragma solidity ^0.8.24;
 ///      A custom alphabet is passed as `Alphabet`: the 58 characters split across two
 ///      `bytes32` (32 + 26), plus a reverse table of 6-bit digit values for ASCII 0x31-0x7a
 ///      ('1'-'z'; 42 entries in `revLo`, 32 in `revHi`), where 63 marks invalid characters.
+///
+/// References:
+/// - Base58Check: https://en.bitcoin.it/wiki/Base58Check_encoding
+/// - Base58 draft spec: https://datatracker.ietf.org/doc/html/draft-msporny-base58-03
 library Base58 {
     error InvalidBase58Character(uint256 index);
     error InvalidBase58Checksum();

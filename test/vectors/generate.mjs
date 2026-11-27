@@ -428,6 +428,37 @@ define('ada', {
   ],
 })
 
+// ------------------------------------------------------------------ eth / evm (ENSIP-11)
+
+const eth = getCoderByCoinName('eth')
+const ethAddr = eth.encode(p20)
+const flipCase = (a) => {
+  const i = [...a].findIndex((c, j) => j > 1 && /[a-fA-F]/.test(c))
+  const c = a[i]
+  return a.slice(0, i) + (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()) + a.slice(i + 1)
+}
+for (const name of ['eth', 'op']) {
+  define(name, {
+    valid: [Buffer.alloc(20), Buffer.alloc(20, 0xff), ...times(30, () => rnd(20))],
+    decodeOnly: [ethAddr.toLowerCase(), '0x' + ethAddr.slice(2).toUpperCase()],
+    invalidAddress: [
+      ['bad checksum', flipCase(ethAddr)],
+      ['no 0x prefix', ethAddr.slice(2)],
+      ['0X prefix', '0X' + ethAddr.slice(2)],
+      ['39 hex digits', ethAddr.slice(0, -1)],
+      ['41 hex digits', ethAddr + 'a'],
+      ['non-hex char', ethAddr.slice(0, -1) + 'g'],
+      ['empty', ''],
+    ],
+    invalidBytes: [
+      ['empty', Buffer.alloc(0)],
+      ['19 bytes', rnd(19)],
+      ['21 bytes', rnd(21)],
+      ['32 bytes', rnd(32)],
+    ],
+  })
+}
+
 // ------------------------------------------------------------------ write
 
 const columns = (rows, fields) => Object.fromEntries(fields.map((f) => [f, rows.map((r) => r[f])]))

@@ -6,6 +6,11 @@ import {Base58} from "./utils/Base58.sol";
 /// @title TronCoder
 /// @notice Tron (coinType 195) address <-> 21 bytes (0x41 ‖ 20-byte account), as used by ENS `addr(node, 195)`.
 /// @dev Addresses are Base58Check ("T...").
+///
+/// References:
+/// - Account address format: https://developers.tron.network/docs/account#account-address-format
+/// - Base58Check: https://en.bitcoin.it/wiki/Base58Check_encoding
+/// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/coin/trx.ts
 library TronCoder {
     error UnrecognisedAddressFormat();
 
@@ -13,13 +18,14 @@ library TronCoder {
 
     uint8 internal constant VERSION = 0x41;
 
-    /// @notice 0x41 ‖ 20-byte account -> "T..." address string.
-    function encode(bytes memory data) internal pure returns (string memory) {
-        if (data.length != 21 || uint8(data[0]) != VERSION) revert UnrecognisedAddressFormat();
-        return Base58.encodeCheck(data);
+    /// @notice 0x41 ‖ 20-byte account -> address string.
+    /// @return ok False if `data` is not 21 bytes starting with 0x41.
+    function encode(bytes memory data) internal pure returns (bool ok, string memory addr) {
+        if (data.length != 21 || uint8(data[0]) != VERSION) return (false, "");
+        return (true, Base58.encodeCheck(data));
     }
 
-    /// @notice "T..." address string -> 0x41 ‖ 20-byte account.
+    /// @notice Address string -> 0x41 ‖ 20-byte account. Reverts on invalid input.
     function decode(string memory addr) internal pure returns (bytes memory data) {
         data = Base58.decodeCheck(addr);
         if (data.length != 21 || uint8(data[0]) != VERSION) revert UnrecognisedAddressFormat();
