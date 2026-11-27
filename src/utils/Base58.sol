@@ -2,23 +2,85 @@
 pragma solidity ^0.8.24;
 
 /// @title Base58
-/// @notice Base58 (Bitcoin alphabet) and Base58Check encoding.
+/// @notice Base58 and Base58Check encoding, with the Bitcoin alphabet by default or a custom one.
 /// @dev All functions are `internal`, so only the ones you call end up in your bytecode.
 ///      The big number is held in 128-bit limbs and processed 10 base58 digits
 ///      (58^10 < 2^59) at a time, which keeps gas low for address-sized inputs.
+///
+///      A custom alphabet is passed as `Alphabet`: the 58 characters split across two
+///      `bytes32` (32 + 26), plus a reverse table of 6-bit digit values for ASCII 0x31-0x7a
+///      ('1'-'z'; 42 entries in `revLo`, 32 in `revHi`), where 63 marks invalid characters.
 library Base58 {
     error InvalidBase58Character(uint256 index);
     error InvalidBase58Checksum();
 
-    bytes32 private constant ALPHABET_LO = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
-    bytes32 private constant ALPHABET_HI = "Zabcdefghijkmnopqrstuvwxyz";
+    struct Alphabet {
+        bytes32 lo;
+        bytes32 hi;
+        uint256 revLo;
+        uint256 revHi;
+    }
+
+    bytes32 internal constant BITCOIN_LO = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    bytes32 internal constant BITCOIN_HI = "Zabcdefghijkmnopqrstuvwxyz";
+    uint256 internal constant BITCOIN_REV_LO = 0x81f79d71b6996175bf5544d247f40f38d30b289ffffffffffc81c61440c2040;
+    uint256 internal constant BITCOIN_REV_HI = 0xe78df6d74cf2c70beeb6cfebaa9a279a59238a1fffffffff;
 
     uint256 private constant LIMB_MASK = type(uint128).max;
     uint256 private constant CHUNK_DIGITS = 10;
     uint256 private constant CHUNK_BASE = 430804206899405824; // 58 ** 10
 
+    function bitcoin() internal pure returns (Alphabet memory) {
+        return Alphabet(BITCOIN_LO, BITCOIN_HI, BITCOIN_REV_LO, BITCOIN_REV_HI);
+    }
+
+    // ------------------------------------------------------------------ Bitcoin alphabet
+
+    /// @notice Encode `data` as base58 (Bitcoin alphabet).
+    function encode(bytes memory data) internal pure returns (string memory) {
+        return encode(data, bitcoin());
+    }
+
+    /// @notice Decode a base58 string (Bitcoin alphabet).
+    function decode(string memory s) internal pure returns (bytes memory) {
+        return decode(s, bitcoin());
+    }
+
+    /// @notice Encode `payload` as Base58Check (payload ‖ sha256d(payload)[:4]), Bitcoin alphabet.
+    function encodeCheck(bytes memory payload) internal pure returns (string memory) {
+        return encodeCheck(payload, bitcoin());
+    }
+
+    /// @notice Decode a Base58Check string (Bitcoin alphabet), verifying and stripping the checksum.
+    function decodeCheck(string memory s) internal pure returns (bytes memory) {
+        return decodeCheck(s, bitcoin());
+    }
+
+    // ------------------------------------------------------------------ custom alphabet
+
+    /// @notice Encode `payload` as Base58Check (payload ‖ sha256d(payload)[:4]).
+    function encodeCheck(bytes memory payload, Alphabet memory a) internal pure returns (string memory) {
+        return encode(abi.encodePacked(payload, bytes4(_sha256d(payload))), a);
+    }
+
+    /// @notice Decode a Base58Check string, verifying and stripping the 4-byte checksum.
+    function decodeCheck(string memory s, Alphabet memory a) internal pure returns (bytes memory payload) {
+        payload = decode(s, a);
+        uint256 n = payload.length;
+        if (n < 4) revert InvalidBase58Checksum();
+        unchecked {
+            n -= 4;
+        }
+        bytes4 checksum;
+        assembly ("memory-safe") {
+            checksum := and(mload(add(add(payload, 32), n)), shl(224, 0xffffffff))
+            mstore(payload, n) // truncate in place
+        }
+        if (bytes4(_sha256d(payload)) != checksum) revert InvalidBase58Checksum();
+    }
+
     /// @notice Encode `data` as base58.
-    function encode(bytes memory data) internal pure returns (string memory out) {
+    function encode(bytes memory data, Alphabet memory a) internal pure returns (string memory out) {
         unchecked {
             uint256 n = data.length;
             uint256 zeros;
@@ -37,6 +99,8 @@ library Base58 {
             uint256 cap = zeros + (m * 1366) / 1000 + 1 + CHUNK_DIGITS;
             bytes memory buf = new bytes(cap);
             uint256 pos = cap;
+            bytes32 lo = a.lo;
+            bytes32 hi = a.hi;
 
             while (used != 0) {
                 // Divide the number by 58^10, keeping the remainder.
@@ -50,13 +114,15 @@ library Base58 {
                 while (used != 0 && limbs[used - 1] == 0) --used;
                 // Emit 10 digits, or only the significant ones for the most significant chunk.
                 for (uint256 k; k < CHUNK_DIGITS; ++k) {
-                    buf[--pos] = _char(rem % 58);
+                    uint256 d = rem % 58;
+                    buf[--pos] = d < 32 ? lo[d] : hi[d - 32];
                     rem /= 58;
                     if (used == 0 && rem == 0) break;
                 }
             }
+            bytes1 zero = lo[0];
             for (uint256 k; k < zeros; ++k) {
-                buf[--pos] = "1";
+                buf[--pos] = zero;
             }
 
             // Return the tail of `buf` in place: buf[pos:cap]. The new length word
@@ -69,12 +135,15 @@ library Base58 {
     }
 
     /// @notice Decode a base58 string.
-    function decode(string memory s) internal pure returns (bytes memory out) {
+    function decode(string memory s, Alphabet memory a) internal pure returns (bytes memory out) {
         bytes memory b = bytes(s);
         unchecked {
             uint256 n = b.length;
+            uint256 revLo = a.revLo;
+            uint256 revHi = a.revHi;
+            bytes1 zero = a.lo[0];
             uint256 zeros;
-            while (zeros < n && b[zeros] == "1") ++zeros;
+            while (zeros < n && b[zeros] == zero) ++zeros;
 
             // log(58)/log(256) < 0.7323
             uint256 maxBytes = ((n - zeros) * 733) / 1000 + 1;
@@ -87,7 +156,7 @@ library Base58 {
                 uint256 acc;
                 uint256 mul = 1;
                 for (; i < end; ++i) {
-                    uint256 d = _digit(uint8(b[i]));
+                    uint256 d = _digit(uint8(b[i]), revLo, revHi);
                     if (d >= 58) revert InvalidBase58Character(i);
                     acc = acc * 58 + d;
                     mul *= 58;
@@ -120,45 +189,16 @@ library Base58 {
         }
     }
 
-    /// @notice Encode `payload` as Base58Check (payload ‖ sha256d(payload)[:4]).
-    function encodeCheck(bytes memory payload) internal pure returns (string memory) {
-        return encode(abi.encodePacked(payload, bytes4(_sha256d(payload))));
-    }
-
-    /// @notice Decode a Base58Check string, verifying and stripping the 4-byte checksum.
-    function decodeCheck(string memory s) internal pure returns (bytes memory payload) {
-        payload = decode(s);
-        uint256 n = payload.length;
-        if (n < 4) revert InvalidBase58Checksum();
-        unchecked {
-            n -= 4;
-        }
-        bytes4 checksum;
-        assembly ("memory-safe") {
-            checksum := and(mload(add(add(payload, 32), n)), shl(224, 0xffffffff))
-            mstore(payload, n) // truncate in place
-        }
-        if (bytes4(_sha256d(payload)) != checksum) revert InvalidBase58Checksum();
-    }
-
     function _sha256d(bytes memory data) private pure returns (bytes32) {
         return sha256(abi.encodePacked(sha256(data)));
     }
 
-    function _char(uint256 d) private pure returns (bytes1) {
-        return d < 32 ? ALPHABET_LO[d] : ALPHABET_HI[d - 32];
-    }
-
-    /// @dev Returns 58 for characters outside the alphabet.
-    function _digit(uint256 c) private pure returns (uint256) {
+    /// @dev Returns >= 58 for characters outside the alphabet.
+    function _digit(uint256 c, uint256 revLo, uint256 revHi) private pure returns (uint256) {
         unchecked {
-            if (c >= 0x31 && c <= 0x39) return c - 0x31; // 1-9
-            if (c >= 0x41 && c <= 0x48) return c - 0x41 + 9; // A-H
-            if (c >= 0x4a && c <= 0x4e) return c - 0x4a + 17; // J-N
-            if (c >= 0x50 && c <= 0x5a) return c - 0x50 + 22; // P-Z
-            if (c >= 0x61 && c <= 0x6b) return c - 0x61 + 33; // a-k
-            if (c >= 0x6d && c <= 0x7a) return c - 0x6d + 44; // m-z
-            return 58;
+            if (c < 0x31 || c > 0x7a) return 63;
+            uint256 i = c - 0x31;
+            return i < 42 ? (revLo >> (i * 6)) & 63 : (revHi >> ((i - 42) * 6)) & 63;
         }
     }
 }

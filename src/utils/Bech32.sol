@@ -2,12 +2,17 @@
 pragma solidity ^0.8.24;
 
 /// @title Bech32
-/// @notice SegWit address encoding: bech32 (BIP-173) for witness v0, bech32m (BIP-350) for v1-v16.
+/// @notice Bech32 (BIP-173) and bech32m (BIP-350) encoding, plus SegWit address helpers.
 /// @dev All functions are `internal`, so only the ones you call end up in your bytecode.
 library Bech32 {
     error InvalidBech32();
     error InvalidWitnessVersion();
     error InvalidWitnessProgram();
+
+    enum Variant {
+        Bech32,
+        Bech32m
+    }
 
     bytes32 private constant CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
@@ -17,8 +22,46 @@ library Bech32 {
     uint256 private constant BECH32_CONST = 1;
     uint256 private constant BECH32M_CONST = 0x2bc830a3;
     uint256 private constant MAX_LENGTH = 90;
+    uint256 private constant NO_VERSION = type(uint256).max;
 
-    /// @notice Encode a SegWit address.
+    // ------------------------------------------------------------------ plain bech32 / bech32m
+
+    /// @notice Encode `data` (8-bit bytes) as `hrp ‖ "1" ‖ words ‖ checksum`.
+    /// @param hrp Lowercase human-readable part, e.g. "xch".
+    function encode(bytes memory hrp, bytes memory data, Variant variant) internal pure returns (string memory) {
+        return _encode(hrp, NO_VERSION, data, _const(variant), MAX_LENGTH);
+    }
+
+    /// @notice Like `encode`, with a custom maximum length instead of 90 (e.g. 104 for Cardano).
+    function encode(bytes memory hrp, bytes memory data, Variant variant, uint256 limit)
+        internal
+        pure
+        returns (string memory)
+    {
+        return _encode(hrp, NO_VERSION, data, _const(variant), limit);
+    }
+
+    /// @notice Decode a bech32/bech32m string, requiring human-readable part `hrp` and checksum `variant`.
+    /// @dev Accepts all-lowercase or all-uppercase input; at most 90 characters (BIP-173).
+    /// @param hrp Lowercase human-readable part, e.g. "xch".
+    function decode(bytes memory hrp, string memory s, Variant variant) internal pure returns (bytes memory) {
+        return decode(hrp, s, variant, MAX_LENGTH);
+    }
+
+    /// @notice Like `decode`, with a custom maximum length instead of 90 (e.g. 104 for Cardano).
+    function decode(bytes memory hrp, string memory s, Variant variant, uint256 limit)
+        internal
+        pure
+        returns (bytes memory data)
+    {
+        uint256 chk;
+        (, data, chk) = _decode(hrp, s, false, limit);
+        if (chk != _const(variant)) revert InvalidBech32();
+    }
+
+    // ------------------------------------------------------------------ SegWit (BIP-173 / BIP-350)
+
+    /// @notice Encode a SegWit address: bech32 for v0, bech32m for v1-v16.
     /// @param hrp Lowercase human-readable part, e.g. "bc".
     /// @param version Witness version, 0-16.
     /// @param program Witness program, 2-40 bytes (20 or 32 for v0).
@@ -28,9 +71,36 @@ library Bech32 {
         returns (string memory)
     {
         _checkProgram(version, program.length);
+        return _encode(hrp, version, program, version == 0 ? BECH32_CONST : BECH32M_CONST, MAX_LENGTH);
+    }
+
+    /// @notice Decode a SegWit address, requiring human-readable part `hrp`.
+    /// @dev Enforces the bech32/bech32m checksum variant matching the witness version,
+    ///      and BIP-141 program lengths.
+    /// @param hrp Lowercase human-readable part, e.g. "bc".
+    function decodeSegwit(bytes memory hrp, string memory addr)
+        internal
+        pure
+        returns (uint256 version, bytes memory program)
+    {
+        uint256 chk;
+        (version, program, chk) = _decode(hrp, addr, true, MAX_LENGTH);
+        if (chk != (version == 0 ? BECH32_CONST : BECH32M_CONST)) revert InvalidBech32();
+        _checkProgram(version, program.length);
+    }
+
+    // ------------------------------------------------------------------ internals
+
+    /// @dev `version` is emitted as a leading 5-bit word unless it is NO_VERSION.
+    function _encode(bytes memory hrp, uint256 version, bytes memory data, uint256 checksumConst, uint256 limit)
+        private
+        pure
+        returns (string memory)
+    {
         unchecked {
             uint256 hrpLen = hrp.length;
-            uint256 nWords = 1 + (program.length * 8 + 4) / 5;
+            uint256 nWords = (version == NO_VERSION ? 0 : 1) + (data.length * 8 + 4) / 5;
+            if (hrpLen + 1 + nWords + 6 > limit) revert InvalidBech32();
             bytes memory out = new bytes(hrpLen + 1 + nWords + 6);
 
             uint256 chk = _hrpChecksum(hrp);
@@ -40,14 +110,16 @@ library Bech32 {
             uint256 pos = hrpLen;
             out[pos++] = "1";
 
-            out[pos++] = CHARSET[version];
-            chk = _polymodStep(chk, version);
+            if (version != NO_VERSION) {
+                out[pos++] = CHARSET[version];
+                chk = _polymodStep(chk, version);
+            }
 
             // Regroup 8-bit bytes into 5-bit words, padding the tail with zeros.
             uint256 acc;
             uint256 bits;
-            for (uint256 i; i < program.length; ++i) {
-                acc = ((acc << 8) | uint8(program[i])) & 0xfff;
+            for (uint256 i; i < data.length; ++i) {
+                acc = ((acc << 8) | uint8(data[i])) & 0xfff;
                 bits += 8;
                 while (bits >= 5) {
                     bits -= 5;
@@ -65,7 +137,7 @@ library Bech32 {
             for (uint256 i; i < 6; ++i) {
                 chk = _polymodStep(chk, 0);
             }
-            chk ^= version == 0 ? BECH32_CONST : BECH32M_CONST;
+            chk ^= checksumConst;
             for (uint256 i; i < 6; ++i) {
                 out[pos++] = CHARSET[(chk >> (5 * (5 - i))) & 31];
             }
@@ -73,21 +145,20 @@ library Bech32 {
         }
     }
 
-    /// @notice Decode a SegWit address, requiring human-readable part `hrp`.
-    /// @dev Accepts all-lowercase or all-uppercase input. Enforces the bech32/bech32m
-    ///      checksum variant matching the witness version, and BIP-141 program lengths.
-    /// @param hrp Lowercase human-readable part, e.g. "bc".
-    function decodeSegwit(bytes memory hrp, string memory addr)
-        internal
+    /// @dev Returns the leading version word (if `hasVersion`), the 8-bit payload, and the
+    ///      final polymod value to compare against BECH32_CONST / BECH32M_CONST.
+    function _decode(bytes memory hrp, string memory s, bool hasVersion, uint256 limit)
+        private
         pure
-        returns (uint256 version, bytes memory program)
+        returns (uint256 version, bytes memory data, uint256 chk)
     {
-        bytes memory b = bytes(addr);
+        bytes memory b = bytes(s);
         uint256 n = b.length;
         uint256 hrpLen = hrp.length;
         unchecked {
-            // hrp ‖ "1" ‖ version ‖ ≥1 data word ‖ 6 checksum words
-            if (n > MAX_LENGTH || n < hrpLen + 9 || b[hrpLen] != "1") revert InvalidBech32();
+            uint256 skip = hasVersion ? 1 : 0;
+            // hrp ‖ "1" ‖ [version] ‖ data ‖ 6 checksum words
+            if (n > limit || n < hrpLen + 7 + skip || b[hrpLen] != "1") revert InvalidBech32();
 
             bool lower;
             bool upper;
@@ -102,13 +173,14 @@ library Bech32 {
                 if (c != uint8(hrp[i])) revert InvalidBech32();
             }
 
-            uint256 chk = _hrpChecksum(hrp);
-            uint256 nData = n - hrpLen - 1 - 6;
-            program = new bytes(((nData - 1) * 5) >> 3);
+            chk = _hrpChecksum(hrp);
+            uint256 start = hrpLen + 1; // first data word
+            uint256 end = n - 6; // first checksum word
+            data = new bytes(((end - start - skip) * 5) >> 3);
             uint256 pos;
             uint256 acc;
             uint256 bits;
-            for (uint256 i = hrpLen + 1; i < n; ++i) {
+            for (uint256 i = start; i < n; ++i) {
                 uint256 c = uint8(b[i]);
                 if (c >= 0x41 && c <= 0x5a) {
                     upper = true;
@@ -119,24 +191,25 @@ library Bech32 {
                 uint256 w = _rev(c);
                 chk = _polymodStep(chk, w);
 
-                uint256 k = i - hrpLen - 1; // index into the data words
-                if (k == 0) {
+                if (hasVersion && i == start) {
                     version = w;
-                } else if (k <= nData - 1) {
+                } else if (i < end) {
                     acc = ((acc << 5) | w) & 0xfff;
                     bits += 5;
                     if (bits >= 8) {
                         bits -= 8;
-                        program[pos++] = bytes1(uint8(acc >> bits));
+                        data[pos++] = bytes1(uint8(acc >> bits));
                     }
                 }
             }
             if (lower && upper) revert InvalidBech32();
             // BIP-173: at most 4 bits of zero padding.
-            if (bits > 4 || (acc & ((1 << bits) - 1)) != 0) revert InvalidWitnessProgram();
-            if (chk != (version == 0 ? BECH32_CONST : BECH32M_CONST)) revert InvalidBech32();
+            if (bits > 4 || (acc & ((1 << bits) - 1)) != 0) revert InvalidBech32();
         }
-        _checkProgram(version, program.length);
+    }
+
+    function _const(Variant variant) private pure returns (uint256) {
+        return variant == Variant.Bech32 ? BECH32_CONST : BECH32M_CONST;
     }
 
     function _checkProgram(uint256 version, uint256 len) private pure {

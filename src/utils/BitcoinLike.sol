@@ -8,22 +8,67 @@ import {Bech32} from "./Bech32.sol";
 /// @notice Shared address <-> scriptPubKey conversion for Bitcoin-style chains
 ///         (P2PKH / P2SH via Base58Check, SegWit via bech32/bech32m).
 /// @dev Mirrors `createBitcoinEncoder` / `createBitcoinDecoder` from ensdomains/address-encoder.
-///      Pass an empty `hrp` for chains without SegWit.
+///      Chains without SegWit should call `encodeLegacy` / `decodeLegacy` directly, so the
+///      bech32 code is never compiled in.
 library BitcoinLike {
     error UnrecognisedAddressFormat();
 
-    /// @notice Address string -> scriptPubKey bytes.
+    /// @notice Address string -> scriptPubKey bytes (Base58Check or SegWit).
     function decode(string memory addr, bytes memory hrp, uint8 p2pkhVersion, uint8 p2shVersion)
         internal
         pure
         returns (bytes memory)
     {
-        if (hrp.length != 0 && _hasSegwitPrefix(bytes(addr), hrp)) {
+        return decode(addr, hrp, p2pkhVersion, p2shVersion, p2shVersion);
+    }
+
+    /// @notice Like `decode`, but also accepts `p2shAltVersion` for P2SH (e.g. Litecoin's legacy "3..." addresses).
+    function decode(string memory addr, bytes memory hrp, uint8 p2pkhVersion, uint8 p2shVersion, uint8 p2shAltVersion)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        if (_hasSegwitPrefix(bytes(addr), hrp)) {
             (uint256 version, bytes memory program) = Bech32.decodeSegwit(hrp, addr);
             // OP_0 or OP_1..OP_16, then a direct push of the program.
             return abi.encodePacked(uint8(version == 0 ? 0 : version + 0x50), uint8(program.length), program);
         }
+        return decodeLegacy(addr, p2pkhVersion, p2shVersion, p2shAltVersion);
+    }
 
+    /// @notice scriptPubKey bytes -> address string (Base58Check or SegWit).
+    function encode(bytes memory script, bytes memory hrp, uint8 p2pkhVersion, uint8 p2shVersion)
+        internal
+        pure
+        returns (string memory)
+    {
+        uint256 n = script.length;
+        uint8 op = n == 0 ? 0xff : uint8(script[0]);
+        if ((op == 0 || (op >= 0x51 && op <= 0x60)) && n >= 2 && uint8(script[1]) == n - 2) {
+            bytes memory program = new bytes(n - 2);
+            for (uint256 i; i < n - 2; ++i) {
+                program[i] = script[i + 2];
+            }
+            return Bech32.encodeSegwit(hrp, op == 0 ? 0 : op - 0x50, program);
+        }
+        return encodeLegacy(script, p2pkhVersion, p2shVersion);
+    }
+
+    /// @notice Base58Check P2PKH / P2SH address -> scriptPubKey bytes.
+    function decodeLegacy(string memory addr, uint8 p2pkhVersion, uint8 p2shVersion)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return decodeLegacy(addr, p2pkhVersion, p2shVersion, p2shVersion);
+    }
+
+    /// @notice Like `decodeLegacy`, but also accepts `p2shAltVersion` for P2SH.
+    function decodeLegacy(string memory addr, uint8 p2pkhVersion, uint8 p2shVersion, uint8 p2shAltVersion)
+        internal
+        pure
+        returns (bytes memory)
+    {
         bytes memory payload = Base58.decodeCheck(addr);
         if (payload.length != 21) revert UnrecognisedAddressFormat();
         uint8 v = uint8(payload[0]);
@@ -31,40 +76,28 @@ library BitcoinLike {
         // OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG
         if (v == p2pkhVersion) return abi.encodePacked(hex"76a914", hash, hex"88ac");
         // OP_HASH160 <20> OP_EQUAL
-        if (v == p2shVersion) return abi.encodePacked(hex"a914", hash, hex"87");
+        if (v == p2shVersion || v == p2shAltVersion) return abi.encodePacked(hex"a914", hash, hex"87");
         revert UnrecognisedAddressFormat();
     }
 
-    /// @notice scriptPubKey bytes -> address string.
-    function encode(bytes memory script, bytes memory hrp, uint8 p2pkhVersion, uint8 p2shVersion)
+    /// @notice P2PKH / P2SH scriptPubKey bytes -> Base58Check address.
+    function encodeLegacy(bytes memory script, uint8 p2pkhVersion, uint8 p2shVersion)
         internal
         pure
         returns (string memory)
     {
         uint256 n = script.length;
-        if (n == 0) revert UnrecognisedAddressFormat();
-        uint8 op = uint8(script[0]);
-
-        if (op == 0x76) {
-            if (n != 25 || script[1] != 0xa9 || script[2] != 0x14 || script[23] != 0x88 || script[24] != 0xac) {
+        if (n == 25) {
+            if (script[0] != 0x76 || script[1] != 0xa9 || script[2] != 0x14 || script[23] != 0x88 || script[24] != 0xac)
+            {
                 revert UnrecognisedAddressFormat();
             }
             return Base58.encodeCheck(abi.encodePacked(p2pkhVersion, _hash20(script, 3)));
         }
-
-        if (op == 0xa9) {
-            if (n != 23 || script[1] != 0x14 || script[22] != 0x87) revert UnrecognisedAddressFormat();
+        if (n == 23) {
+            if (script[0] != 0xa9 || script[1] != 0x14 || script[22] != 0x87) revert UnrecognisedAddressFormat();
             return Base58.encodeCheck(abi.encodePacked(p2shVersion, _hash20(script, 2)));
         }
-
-        if (hrp.length != 0 && (op == 0 || (op >= 0x51 && op <= 0x60)) && n >= 2 && uint8(script[1]) == n - 2) {
-            bytes memory program = new bytes(n - 2);
-            for (uint256 i; i < n - 2; ++i) {
-                program[i] = script[i + 2];
-            }
-            return Bech32.encodeSegwit(hrp, op == 0 ? 0 : op - 0x50, program);
-        }
-
         revert UnrecognisedAddressFormat();
     }
 
