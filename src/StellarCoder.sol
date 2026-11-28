@@ -13,8 +13,6 @@ import {Base32} from "./utils/Base32.sol";
 /// - RFC 4648 (base32): https://datatracker.ietf.org/doc/html/rfc4648#section-6
 /// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/coin/xlm.ts
 library StellarCoder {
-    error UnrecognisedAddressFormat();
-
     uint256 internal constant COIN_TYPE = 148;
 
     uint8 internal constant VERSION = 0x30; // 6 << 3, account ID
@@ -31,13 +29,15 @@ library StellarCoder {
         return _encode(abi.encodePacked(pubkey));
     }
 
-    /// @notice "G..." address string -> 32-byte public key. Reverts on invalid input.
-    function decode(string memory addr) internal pure returns (bytes memory pubkey) {
-        if (bytes(addr).length != 56) revert UnrecognisedAddressFormat();
-        bytes memory raw = Base32.decode(addr);
-        if (uint8(raw[0]) != VERSION) revert UnrecognisedAddressFormat();
+    /// @notice "G..." address string -> 32-byte public key.
+    /// @return ok False if `addr` is not a valid account StrKey.
+    function decode(string memory addr) internal pure returns (bool ok, bytes memory pubkey) {
+        if (bytes(addr).length != 56) return (false, "");
+        bytes memory raw;
+        (ok, raw) = Base32.decode(addr);
+        if (!ok || uint8(raw[0]) != VERSION) return (false, "");
         uint256 crc = _crc16(raw, 33);
-        if (uint8(raw[33]) != uint8(crc) || uint8(raw[34]) != uint8(crc >> 8)) revert UnrecognisedAddressFormat();
+        if (uint8(raw[33]) != uint8(crc) || uint8(raw[34]) != uint8(crc >> 8)) return (false, "");
         pubkey = new bytes(32);
         for (uint256 i; i < 32; ++i) {
             pubkey[i] = raw[i + 1];

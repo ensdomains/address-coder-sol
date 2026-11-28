@@ -7,7 +7,8 @@ import {PolkadotCoder} from "../src/PolkadotCoder.sol";
 
 contract Blake2bTest is Test {
     function _hex(bytes memory data) internal view returns (bytes memory) {
-        (bytes32 lo, bytes32 hi) = Blake2b.hash512(data);
+        (bool ok, bytes32 lo, bytes32 hi) = Blake2b.hash512(data);
+        assertTrue(ok);
         return abi.encodePacked(lo, hi);
     }
 
@@ -45,12 +46,16 @@ contract Blake2bTest is Test {
 
     /// @dev A chain without the precompile: the call "succeeds" with no return data.
     function test_missingPrecompile() public {
+        (, string memory addr) = PolkadotCoder.encode(new bytes(32));
         vm.mockCall(address(9), bytes(""), bytes(""));
-        (bool ok,,) = Blake2b.tryHash512("abc");
+        (bool ok,,) = Blake2b.hash512("abc");
         assertFalse(ok);
         (bool encoded, string memory s) = PolkadotCoder.encode(new bytes(32));
         assertFalse(encoded);
         assertEq(s, "");
+        (bool decoded, bytes memory d) = PolkadotCoder.decode(addr);
+        assertFalse(decoded);
+        assertEq(d, "");
     }
 
     function _seq(uint256 n) internal pure returns (bytes memory b) {

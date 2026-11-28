@@ -10,10 +10,6 @@ pragma solidity ^0.8.24;
 /// - BIP-350 (bech32m): https://github.com/bitcoin/bips/blob/master/bip-0350.mediawiki
 /// - BIP-141 (witness programs): https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki
 library Bech32 {
-    error InvalidBech32();
-    error InvalidWitnessVersion();
-    error InvalidWitnessProgram();
-
     enum Variant {
         Bech32,
         Bech32m
@@ -33,7 +29,12 @@ library Bech32 {
 
     /// @notice Encode `data` (8-bit bytes) as `hrp ‖ "1" ‖ words ‖ checksum`.
     /// @param hrp Lowercase human-readable part, e.g. "xch".
-    function encode(bytes memory hrp, bytes memory data, Variant variant) internal pure returns (string memory) {
+    /// @return ok False if the result would be longer than 90 characters (BIP-173).
+    function encode(bytes memory hrp, bytes memory data, Variant variant)
+        internal
+        pure
+        returns (bool ok, string memory s)
+    {
         return _encode(hrp, NO_VERSION, data, _const(variant), MAX_LENGTH);
     }
 
@@ -41,7 +42,7 @@ library Bech32 {
     function encode(bytes memory hrp, bytes memory data, Variant variant, uint256 limit)
         internal
         pure
-        returns (string memory)
+        returns (bool ok, string memory s)
     {
         return _encode(hrp, NO_VERSION, data, _const(variant), limit);
     }
@@ -49,7 +50,12 @@ library Bech32 {
     /// @notice Decode a bech32/bech32m string, requiring human-readable part `hrp` and checksum `variant`.
     /// @dev Accepts all-lowercase or all-uppercase input; at most 90 characters (BIP-173).
     /// @param hrp Lowercase human-readable part, e.g. "xch".
-    function decode(bytes memory hrp, string memory s, Variant variant) internal pure returns (bytes memory) {
+    /// @return ok False if `s` is not valid for `hrp` and `variant`.
+    function decode(bytes memory hrp, string memory s, Variant variant)
+        internal
+        pure
+        returns (bool ok, bytes memory data)
+    {
         return decode(hrp, s, variant, MAX_LENGTH);
     }
 
@@ -57,11 +63,11 @@ library Bech32 {
     function decode(bytes memory hrp, string memory s, Variant variant, uint256 limit)
         internal
         pure
-        returns (bytes memory data)
+        returns (bool ok, bytes memory data)
     {
         uint256 chk;
-        (, data, chk) = _decode(hrp, s, false, limit);
-        if (chk != _const(variant)) revert InvalidBech32();
+        (ok,, data, chk) = _decode(hrp, s, false, limit);
+        if (!ok || chk != _const(variant)) return (false, "");
     }
 
     // ------------------------------------------------------------------ SegWit (BIP-173 / BIP-350)
@@ -70,12 +76,13 @@ library Bech32 {
     /// @param hrp Lowercase human-readable part, e.g. "bc".
     /// @param version Witness version, 0-16.
     /// @param program Witness program, 2-40 bytes (20 or 32 for v0).
+    /// @return ok False if `version` / `program` are not valid under BIP-141, or the result is over 90 characters.
     function encodeSegwit(bytes memory hrp, uint256 version, bytes memory program)
         internal
         pure
-        returns (string memory)
+        returns (bool ok, string memory addr)
     {
-        _checkProgram(version, program.length);
+        if (!isValidWitnessProgram(version, program.length)) return (false, "");
         return _encode(hrp, version, program, version == 0 ? BECH32_CONST : BECH32M_CONST, MAX_LENGTH);
     }
 
@@ -83,23 +90,20 @@ library Bech32 {
     /// @dev Enforces the bech32/bech32m checksum variant matching the witness version,
     ///      and BIP-141 program lengths.
     /// @param hrp Lowercase human-readable part, e.g. "bc".
+    /// @return ok False if `addr` is not a valid SegWit address for `hrp`.
     function decodeSegwit(bytes memory hrp, string memory addr)
         internal
         pure
-        returns (uint256 version, bytes memory program)
+        returns (bool ok, uint256 version, bytes memory program)
     {
         uint256 chk;
-        (version, program, chk) = _decode(hrp, addr, true, MAX_LENGTH);
-        if (chk != (version == 0 ? BECH32_CONST : BECH32M_CONST)) revert InvalidBech32();
-        _checkProgram(version, program.length);
-    }
-
-    // ------------------------------------------------------------------ validation helpers
-
-    /// @notice Length of the string `encode` produces for `dataLen` bytes under an `hrpLen`-char hrp.
-    ///         Compare it with the limit (90, or a custom one) before encoding, to avoid a revert.
-    function encodedLength(uint256 hrpLen, uint256 dataLen) internal pure returns (uint256) {
-        return hrpLen + 1 + (dataLen * 8 + 4) / 5 + 6;
+        (ok, version, program, chk) = _decode(hrp, addr, true, MAX_LENGTH);
+        if (
+            !ok || chk != (version == 0 ? BECH32_CONST : BECH32M_CONST)
+                || !isValidWitnessProgram(version, program.length)
+        ) {
+            return (false, 0, "");
+        }
     }
 
     /// @notice Whether witness `version` with a `len`-byte program is valid under BIP-141.
@@ -113,12 +117,12 @@ library Bech32 {
     function _encode(bytes memory hrp, uint256 version, bytes memory data, uint256 checksumConst, uint256 limit)
         private
         pure
-        returns (string memory)
+        returns (bool, string memory)
     {
         unchecked {
             uint256 hrpLen = hrp.length;
             uint256 nWords = (version == NO_VERSION ? 0 : 1) + (data.length * 8 + 4) / 5;
-            if (hrpLen + 1 + nWords + 6 > limit) revert InvalidBech32();
+            if (hrpLen + 1 + nWords + 6 > limit) return (false, "");
             bytes memory out = new bytes(hrpLen + 1 + nWords + 6);
 
             uint256 chk = _hrpChecksum(hrp);
@@ -159,16 +163,16 @@ library Bech32 {
             for (uint256 i; i < 6; ++i) {
                 out[pos++] = CHARSET[(chk >> (5 * (5 - i))) & 31];
             }
-            return string(out);
+            return (true, string(out));
         }
     }
 
-    /// @dev Returns the leading version word (if `hasVersion`), the 8-bit payload, and the
-    ///      final polymod value to compare against BECH32_CONST / BECH32M_CONST.
+    /// @dev Returns whether `s` is well formed, the leading version word (if `hasVersion`), the
+    ///      8-bit payload, and the final polymod value to compare against BECH32_CONST / BECH32M_CONST.
     function _decode(bytes memory hrp, string memory s, bool hasVersion, uint256 limit)
         private
         pure
-        returns (uint256 version, bytes memory data, uint256 chk)
+        returns (bool, uint256 version, bytes memory data, uint256 chk)
     {
         bytes memory b = bytes(s);
         uint256 n = b.length;
@@ -176,7 +180,7 @@ library Bech32 {
         unchecked {
             uint256 skip = hasVersion ? 1 : 0;
             // hrp ‖ "1" ‖ [version] ‖ data ‖ 6 checksum words
-            if (n > limit || n < hrpLen + 7 + skip || b[hrpLen] != "1") revert InvalidBech32();
+            if (n > limit || n < hrpLen + 7 + skip || b[hrpLen] != "1") return (false, 0, "", 0);
 
             bool lower;
             bool upper;
@@ -188,7 +192,7 @@ library Bech32 {
                 } else if (c >= 0x61 && c <= 0x7a) {
                     lower = true;
                 }
-                if (c != uint8(hrp[i])) revert InvalidBech32();
+                if (c != uint8(hrp[i])) return (false, 0, "", 0);
             }
 
             chk = _hrpChecksum(hrp);
@@ -207,6 +211,7 @@ library Bech32 {
                     lower = true;
                 }
                 uint256 w = _rev(c);
+                if (w > 31) return (false, 0, "", 0);
                 chk = _polymodStep(chk, w);
 
                 if (hasVersion && i == start) {
@@ -220,19 +225,15 @@ library Bech32 {
                     }
                 }
             }
-            if (lower && upper) revert InvalidBech32();
+            if (lower && upper) return (false, 0, "", 0);
             // BIP-173: at most 4 bits of zero padding.
-            if (bits > 4 || (acc & ((1 << bits) - 1)) != 0) revert InvalidBech32();
+            if (bits > 4 || (acc & ((1 << bits) - 1)) != 0) return (false, 0, "", 0);
         }
+        return (true, version, data, chk);
     }
 
     function _const(Variant variant) private pure returns (uint256) {
         return variant == Variant.Bech32 ? BECH32_CONST : BECH32M_CONST;
-    }
-
-    function _checkProgram(uint256 version, uint256 len) private pure {
-        if (version > 16) revert InvalidWitnessVersion();
-        if (!isValidWitnessProgram(version, len)) revert InvalidWitnessProgram();
     }
 
     function _hrpChecksum(bytes memory hrp) private pure returns (uint256 chk) {
@@ -260,15 +261,12 @@ library Bech32 {
         return chk;
     }
 
-    /// @dev Lowercase char -> 5-bit value; reverts if not in the charset.
-    function _rev(uint256 c) private pure returns (uint256 w) {
+    /// @dev Lowercase char -> 5-bit value, or 32 if not in the charset.
+    function _rev(uint256 c) private pure returns (uint256) {
         unchecked {
-            uint256 idx;
-            if (c >= 0x30 && c <= 0x39) idx = c - 0x30;
-            else if (c >= 0x61 && c <= 0x7a) idx = c - 0x61 + 10;
-            else revert InvalidBech32();
-            w = (CHARSET_REV >> (idx * 6)) & 63;
-            if (w > 31) revert InvalidBech32();
+            if (c >= 0x30 && c <= 0x39) return (CHARSET_REV >> ((c - 0x30) * 6)) & 63;
+            if (c >= 0x61 && c <= 0x7a) return (CHARSET_REV >> ((c - 0x61 + 10) * 6)) & 63;
+            return 32;
         }
     }
 }

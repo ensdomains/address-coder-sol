@@ -12,8 +12,6 @@ import {Base58} from "./utils/Base58.sol";
 /// - Base58 alphabet: https://en.bitcoin.it/wiki/Base58Check_encoding#Base58_symbol_chart
 /// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/coin/sol.ts
 library SolanaCoder {
-    error UnrecognisedAddressFormat();
-
     uint256 internal constant COIN_TYPE = 501;
 
     /// @notice 32-byte public key -> base58 address string.
@@ -28,11 +26,12 @@ library SolanaCoder {
         return Base58.encode(abi.encodePacked(pubkey));
     }
 
-    /// @notice Base58 address string -> 32-byte public key. Reverts on invalid input.
-    function decode(string memory addr) internal pure returns (bytes memory pubkey) {
+    /// @notice Base58 address string -> 32-byte public key.
+    /// @return ok False if `addr` is not base58 of 32 bytes.
+    function decode(string memory addr) internal pure returns (bool ok, bytes memory pubkey) {
         uint256 n = bytes(addr).length;
-        if (n < 32 || n > 44) revert UnrecognisedAddressFormat();
-        pubkey = Base58.decode(addr);
-        if (pubkey.length != 32) revert UnrecognisedAddressFormat();
+        if (n < 32 || n > 44) return (false, "");
+        (ok, pubkey) = Base58.decode(addr);
+        if (!ok || pubkey.length != 32) return (false, "");
     }
 }

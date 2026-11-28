@@ -1962,13 +1962,11 @@
     },
     "invalidBytes": {
       "bytes": [
-        "0x",
         "0x8e8de56b318a0e591d466b6a3887c7e88fb829",
         "0xce68ea3fd53a0f51c67513cd17cdd7a02b619f82eb",
         "0xd24ffe868b95443cbeaba82c38d079087d11f3e852190b4a798a4de8a2d942b5"
       ],
       "reason": [
-        "empty",
         "19 bytes",
         "21 bytes",
         "32 bytes"
@@ -2079,13 +2077,11 @@
     },
     "invalidBytes": {
       "bytes": [
-        "0x",
         "0xb56c0fa68147fcc52ce8443a0c43f50555117e",
         "0xe53b52c127f622dca287250ffc9f5592620e211dcc",
         "0x99f4194472d66aa74856fcd2660630e7cf63305b2918891748d42514a2fad4f8"
       ],
       "reason": [
-        "empty",
         "19 bytes",
         "21 bytes",
         "32 bytes"

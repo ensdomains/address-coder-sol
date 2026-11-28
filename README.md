@@ -22,24 +22,27 @@ human-readable chain addresses to and from the binary form ENS stores in `addr(n
 | `CardanoCoder`     | 1815     | `addr1…` (Shelley), `Ae2…` / `Ddz…` (Byron) | CIP-19 address bytes / Byron CBOR address |
 | `ChiaCoder`        | 8444     | `xch1…` (bech32m)                        | 32-byte puzzle hash                       |
 
-Every library has the same shape, plus a `COIN_TYPE` constant:
+Every library has the same shape, plus a `COIN_TYPE` constant (`EvmCoder` has `COIN_TYPE_ETH` and
+`COIN_TYPE_DEFAULT` instead):
 
 ```solidity
-function encode(bytes memory data) internal pure returns (bool ok, string memory addr); // never reverts
-function decode(string memory addr) internal pure returns (bytes memory data);         // reverts on bad input
+function encode(bytes memory data) internal pure returns (bool ok, string memory addr);
+function decode(string memory addr) internal pure returns (bool ok, bytes memory data);
 ```
 
-`encode` turns stored bytes, which may be malformed, into a string, so it reports failure as
-`(false, "")` instead of reverting. That makes it safe in view and rendering paths. `decode` takes
-user input, so it reverts with a custom error. Coders whose input has a fixed size (Solana, Chia,
-Stellar, EVM) also offer an infallible `encode(bytes32)` / `encode(address)` that returns a plain
-`string`. Each coder's NatSpec lists the specs it implements.
+Neither function reverts (short of running out of gas). Invalid input returns `(false, "")`, so a
+contract can handle bad stored bytes or a bad user-supplied address without `try`/`catch`, which
+can't wrap `internal` library calls anyway. If you want a revert, add your own:
+`if (!ok) revert InvalidAddress();`. Coders whose input has a fixed size (Solana, Chia, Stellar, EVM)
+also offer an infallible `encode(bytes32)` / `encode(address)` that returns a plain `string`. Each
+coder's NatSpec lists the specs it implements.
 
 ¹ Decode only: `encode` emits the canonical form (`M…` for LTC P2SH, `bitcoincash:…` for BCH). BCH
   also accepts CashAddr without the `bitcoincash:` prefix.<br>
 ² `view`, not `pure`: the SS58 checksum uses the EIP-152 BLAKE2b precompile (`0x09`), which some
-  L2s / zkEVMs don't implement. Where it's missing, `encode` returns `(false, "")` and `decode` reverts.<br>
-³ ENSIP-11 EVM chains. All of them use the same EIP-55 format as ETH.
+  L2s / zkEVMs don't implement. Where it's missing, `encode` and `decode` both return `false`.<br>
+³ ENSIP-19 EVM chains, including the default coin type `0x80000000`. All of them use the same EIP-55
+  format as ETH, and empty bytes (no address set) encode as the zero address.
 
 ### `AddressCoder`
 
@@ -49,23 +52,23 @@ One entry point that dispatches by coinType:
 import {AddressCoder} from "address-coder-sol/AddressCoder.sol";
 
 (bool ok, string memory addr) = AddressCoder.encode(coinType, data); // false for unsupported / invalid
-bytes memory data = AddressCoder.decode(coinType, addr);             // reverts UnsupportedCoinType / coder error
+(bool ok, bytes memory data) = AddressCoder.decode(coinType, addr);  // false for unsupported / invalid
 bool supported = AddressCoder.isSupported(coinType);
 ```
 
-`AddressCoder` compiles in every coder you reach through it (about 8 KB each for `encode` and `decode`). If you
+`AddressCoder` compiles in every coder you reach through it (about 8–9 KB each for `encode` and `decode`). If you
 only need a few chains, import their coders directly.
 
 ```solidity
 import {BitcoinCoder} from "address-coder-sol/BitcoinCoder.sol";
 
-bytes memory script = BitcoinCoder.decode("bc1q...");        // 0x0014...
+(bool ok, bytes memory script) = BitcoinCoder.decode("bc1q..."); // 0x0014...
 (bool ok, string memory addr) = BitcoinCoder.encode(script);
 ```
 
 Each coder is its own library of `internal` functions, so only what you call is compiled into your
 contract. Each coder adds about 1–3.5 KB per direction; for example, `SolanaCoder.decode` alone is
-~1.3 KB and pulls in none of the Bitcoin, bech32 or encode code.
+~1.4 KB and pulls in none of the Bitcoin, bech32 or encode code.
 
 Reusable building blocks live in `src/utils`:
 
@@ -79,7 +82,9 @@ Reusable building blocks live in `src/utils`:
 - `Blake2b`: BLAKE2b-512 using the EIP-152 precompile
 - `SS58`: Substrate addresses (single-byte network prefixes)
 
-Invalid input reverts with a custom error.
+The utils follow the same rule: decoders return `ok = false` instead of reverting, and so do
+encoders that can fail (`Bech32` over its length limit, `CashAddr` with an unsupported hash size,
+`Blake2b` without the precompile).
 
 ## Differences from the JS reference
 
@@ -91,7 +96,8 @@ addresses:
 - **BTC / DOGE / TRX / XRP Base58Check:** payloads of the wrong length or with the wrong version byte.
 - **Chia:** addresses that don't decode to exactly 32 bytes.
 - **Cosmos:** empty account bytes.
-- **EVM:** only 20-byte inputs encode. The reference hex-encodes any length.
+- **EVM:** only 20-byte inputs encode, plus empty bytes, which encode as the zero address. The
+  reference hex-encodes any length.
 - **Stellar:** keys that aren't 32 bytes.
 - **Cardano:** Shelley addresses that aren't mainnet or that break CIP-19 lengths, reward addresses
   under the `addr` prefix, and Byron addresses whose inner bytes aren't a CBOR address (`0x83…`).

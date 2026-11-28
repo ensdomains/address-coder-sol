@@ -13,8 +13,6 @@ import {Bech32} from "./utils/Bech32.sol";
 /// - BIP-173 (bech32): https://github.com/bitcoin/bips/blob/master/bip-0173.mediawiki
 /// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/coin/atom.ts
 library CosmosCoder {
-    error UnrecognisedAddressFormat();
-
     uint256 internal constant COIN_TYPE = 118;
 
     bytes internal constant HRP = "cosmos";
@@ -22,13 +20,14 @@ library CosmosCoder {
     /// @notice Account bytes -> "cosmos1..." address string.
     /// @return ok False if `data` is empty or too long for a 90-char address (> 48 bytes).
     function encode(bytes memory data) internal pure returns (bool ok, string memory addr) {
-        if (data.length == 0 || Bech32.encodedLength(HRP.length, data.length) > 90) return (false, "");
-        return (true, Bech32.encode(HRP, data, Bech32.Variant.Bech32));
+        if (data.length == 0) return (false, "");
+        return Bech32.encode(HRP, data, Bech32.Variant.Bech32);
     }
 
-    /// @notice "cosmos1..." address string -> account bytes. Reverts on invalid input.
-    function decode(string memory addr) internal pure returns (bytes memory data) {
-        data = Bech32.decode(HRP, addr, Bech32.Variant.Bech32);
-        if (data.length == 0) revert UnrecognisedAddressFormat();
+    /// @notice "cosmos1..." address string -> account bytes.
+    /// @return ok False if `addr` is not a bech32 "cosmos" address of at least 1 byte.
+    function decode(string memory addr) internal pure returns (bool ok, bytes memory data) {
+        (ok, data) = Bech32.decode(HRP, addr, Bech32.Variant.Bech32);
+        if (!ok || data.length == 0) return (false, "");
     }
 }

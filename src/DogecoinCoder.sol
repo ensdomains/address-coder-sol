@@ -23,8 +23,9 @@ library DogecoinCoder {
         return BitcoinLike.encodeLegacy(script, P2PKH_VERSION, P2SH_VERSION);
     }
 
-    /// @notice Address string -> scriptPubKey. Reverts on invalid input.
-    function decode(string memory addr) internal pure returns (bytes memory) {
+    /// @notice Address string -> scriptPubKey.
+    /// @return ok False if `addr` is not a valid address.
+    function decode(string memory addr) internal pure returns (bool ok, bytes memory data) {
         return BitcoinLike.decodeLegacy(addr, P2PKH_VERSION, P2SH_VERSION);
     }
 }

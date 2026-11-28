@@ -18,8 +18,6 @@ import {Bech32} from "./utils/Bech32.sol";
 /// - BIP-173 (bech32): https://github.com/bitcoin/bips/blob/master/bip-0173.mediawiki
 /// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/coin/ada.ts
 library CardanoCoder {
-    error UnrecognisedAddressFormat();
-
     uint256 internal constant COIN_TYPE = 1815;
 
     bytes internal constant HRP = "addr";
@@ -36,17 +34,18 @@ library CardanoCoder {
             if (data.length >= 0x10000) return (false, "");
             return (true, _encodeByron(data));
         }
-        if (!_isShelley(data) || Bech32.encodedLength(HRP.length, data.length) > BECH32_LIMIT) return (false, "");
-        return (true, Bech32.encode(HRP, data, Bech32.Variant.Bech32, BECH32_LIMIT));
+        if (!_isShelley(data)) return (false, "");
+        return Bech32.encode(HRP, data, Bech32.Variant.Bech32, BECH32_LIMIT);
     }
 
-    /// @notice "addr1..." (Shelley) or Byron base58 string -> address bytes. Reverts on invalid input.
-    function decode(string memory addr) internal pure returns (bytes memory data) {
+    /// @notice "addr1..." (Shelley) or Byron base58 string -> address bytes.
+    /// @return ok False if `addr` is neither a mainnet CIP-19 payment address nor a Byron address.
+    function decode(string memory addr) internal pure returns (bool ok, bytes memory data) {
         if (_hasShelleyPrefix(bytes(addr))) {
-            data = Bech32.decode(HRP, addr, Bech32.Variant.Bech32, BECH32_LIMIT);
-            if (!_isShelley(data)) revert UnrecognisedAddressFormat();
+            (ok, data) = Bech32.decode(HRP, addr, Bech32.Variant.Bech32, BECH32_LIMIT);
+            if (!ok || !_isShelley(data)) return (false, "");
         } else {
-            data = _decodeByron(addr);
+            return _decodeByron(addr);
         }
     }
 
@@ -86,11 +85,11 @@ library CardanoCoder {
         return Base58.encode(abi.encodePacked(hex"82d818", len, payload, _cborUint(_crc32(payload))));
     }
 
-    function _decodeByron(string memory addr) private pure returns (bytes memory payload) {
-        bytes memory raw = Base58.decode(addr);
+    function _decodeByron(string memory addr) private pure returns (bool, bytes memory payload) {
+        (bool valid, bytes memory raw) = Base58.decode(addr);
         uint256 n = raw.length;
         // 0x82 = array(2), 0xd818 = tag(24), then a byte string
-        if (n < 5 || raw[0] != 0x82 || raw[1] != 0xd8 || raw[2] != 0x18) revert UnrecognisedAddressFormat();
+        if (!valid || n < 5 || raw[0] != 0x82 || raw[1] != 0xd8 || raw[2] != 0x18) return (false, "");
 
         uint256 h = uint8(raw[3]);
         uint256 pos;
@@ -101,29 +100,30 @@ library CardanoCoder {
         } else if (h == 0x58) {
             len = uint8(raw[4]);
             pos = 5;
-            if (len < 24) revert UnrecognisedAddressFormat();
+            if (len < 24) return (false, "");
         } else if (h == 0x59 && n > 5) {
             len = (uint256(uint8(raw[4])) << 8) | uint8(raw[5]);
             pos = 6;
-            if (len < 0x100) revert UnrecognisedAddressFormat();
+            if (len < 0x100) return (false, "");
         } else {
-            revert UnrecognisedAddressFormat();
+            return (false, "");
         }
-        if (pos + len >= n) revert UnrecognisedAddressFormat();
+        if (pos + len >= n) return (false, "");
 
         payload = new bytes(len);
         for (uint256 i; i < len; ++i) {
             payload[i] = raw[pos + i];
         }
-        if (len == 0 || uint8(payload[0]) != 0x83) revert UnrecognisedAddressFormat();
+        if (len == 0 || uint8(payload[0]) != 0x83) return (false, "");
 
         // The checksum must be the canonical CBOR uint and the last item.
         bytes memory crc = _cborUint(_crc32(payload));
         pos += len;
-        if (n - pos != crc.length) revert UnrecognisedAddressFormat();
+        if (n - pos != crc.length) return (false, "");
         for (uint256 i; i < crc.length; ++i) {
-            if (raw[pos + i] != crc[i]) revert UnrecognisedAddressFormat();
+            if (raw[pos + i] != crc[i]) return (false, "");
         }
+        return (true, payload);
     }
 
     /// @dev Canonical (shortest) CBOR encoding of an unsigned integer < 2^32.

@@ -24,8 +24,9 @@ library PolkadotCoder {
         return SS58.encode(SS58_PREFIX, account);
     }
 
-    /// @notice SS58 address string -> 32-byte account ID. Reverts on invalid input.
-    function decode(string memory addr) internal view returns (bytes memory) {
+    /// @notice SS58 address string -> 32-byte account ID.
+    /// @return ok False if `addr` is not a valid address.
+    function decode(string memory addr) internal view returns (bool ok, bytes memory data) {
         return SS58.decode(SS58_PREFIX, addr);
     }
 }

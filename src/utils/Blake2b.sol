@@ -10,22 +10,13 @@ pragma solidity ^0.8.24;
 /// - RFC 7693 (BLAKE2): https://datatracker.ietf.org/doc/html/rfc7693
 /// - EIP-152 (BLAKE2b F precompile): https://eips.ethereum.org/EIPS/eip-152
 library Blake2b {
-    error Blake2bFailed();
-
     /// @dev BLAKE2b-512 initial state (IV with h[0] ^= 0x01010040), as 8 little-endian uint64s.
     bytes32 private constant H_LO = 0x48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5;
     bytes32 private constant H_HI = 0xd182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b;
 
     /// @notice BLAKE2b-512 of `data`, returned as two 32-byte halves.
-    /// @dev Reverts if the precompile is unavailable.
-    function hash512(bytes memory data) internal view returns (bytes32 lo, bytes32 hi) {
-        bool ok;
-        (ok, lo, hi) = tryHash512(data);
-        if (!ok) revert Blake2bFailed();
-    }
-
-    /// @notice Like `hash512`, but returns `ok = false` instead of reverting if the precompile is unavailable.
-    function tryHash512(bytes memory data) internal view returns (bool ok, bytes32 lo, bytes32 hi) {
+    /// @return ok False if the precompile is unavailable.
+    function hash512(bytes memory data) internal view returns (bool ok, bytes32 lo, bytes32 hi) {
         ok = true;
         assembly ("memory-safe") {
             // F input (213 bytes): rounds[4] ‖ h[64] ‖ m[128] ‖ t[16] ‖ f[1]

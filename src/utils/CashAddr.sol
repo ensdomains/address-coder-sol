@@ -9,8 +9,6 @@ pragma solidity ^0.8.24;
 /// References:
 /// - CashAddr: https://github.com/bitcoincashorg/bitcoincash.org/blob/master/spec/cashaddr.md
 library CashAddr {
-    error InvalidCashAddr();
-
     bytes32 private constant CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
     /// @dev 6-bit reverse lookup for '0'-'9' then 'a'-'z'; 32 means "not in charset".
@@ -18,9 +16,15 @@ library CashAddr {
 
     /// @notice Encode `hash` (20, 24, 28, 32, 40, 48, 56 or 64 bytes) with address type `kind` (0-15).
     /// @param prefix Lowercase network prefix, e.g. "bitcoincash".
-    function encode(bytes memory prefix, uint256 kind, bytes memory hash) internal pure returns (string memory) {
-        if (kind > 15) revert InvalidCashAddr();
-        bytes memory payload = abi.encodePacked(uint8((kind << 3) | _sizeCode(hash.length)), hash);
+    /// @return ok False if `kind` > 15 or `hash` has an unsupported length.
+    function encode(bytes memory prefix, uint256 kind, bytes memory hash)
+        internal
+        pure
+        returns (bool ok, string memory addr)
+    {
+        uint256 code = _sizeCode(hash.length);
+        if (kind > 15 || code > 7) return (false, "");
+        bytes memory payload = abi.encodePacked(uint8((kind << 3) | code), hash);
         unchecked {
             uint256 prefixLen = prefix.length;
             uint256 nWords = (payload.length * 8 + 4) / 5;
@@ -58,14 +62,19 @@ library CashAddr {
             for (uint256 i; i < 8; ++i) {
                 out[pos++] = CHARSET[(chk >> (5 * (7 - i))) & 31];
             }
-            return string(out);
+            return (true, string(out));
         }
     }
 
     /// @notice Decode a CashAddr string. The `prefix:` part is optional; if present it must match.
     /// @dev Accepts all-lowercase or all-uppercase input.
     /// @param prefix Lowercase network prefix, e.g. "bitcoincash".
-    function decode(bytes memory prefix, string memory s) internal pure returns (uint256 kind, bytes memory hash) {
+    /// @return ok False if `s` is not a valid CashAddr for `prefix`.
+    function decode(bytes memory prefix, string memory s)
+        internal
+        pure
+        returns (bool ok, uint256 kind, bytes memory hash)
+    {
         bytes memory b = bytes(s);
         uint256 n = b.length;
         uint256 prefixLen = prefix.length;
@@ -82,11 +91,11 @@ library CashAddr {
                     } else if (c >= 0x61 && c <= 0x7a) {
                         lower = true;
                     }
-                    if (c != uint8(prefix[i])) revert InvalidCashAddr();
+                    if (c != uint8(prefix[i])) return (false, 0, "");
                 }
                 start = prefixLen + 1;
             }
-            if (n < start + 8 + 2) revert InvalidCashAddr();
+            if (n < start + 8 + 2) return (false, 0, "");
 
             uint256 end = n - 8; // first checksum word
             bytes memory data = new bytes(((end - start) * 5) >> 3);
@@ -103,6 +112,7 @@ library CashAddr {
                     lower = true;
                 }
                 uint256 w = _rev(c);
+                if (w > 31) return (false, 0, "");
                 chk = _polymodStep(chk, w);
                 if (i < end) {
                     acc = ((acc << 5) | w) & 0xfff;
@@ -113,20 +123,21 @@ library CashAddr {
                     }
                 }
             }
-            if (lower && upper) revert InvalidCashAddr();
-            if (chk != 1) revert InvalidCashAddr();
-            if (bits > 4 || (acc & ((1 << bits) - 1)) != 0) revert InvalidCashAddr();
+            if (lower && upper) return (false, 0, "");
+            if (chk != 1) return (false, 0, "");
+            if (bits > 4 || (acc & ((1 << bits) - 1)) != 0) return (false, 0, "");
 
             uint256 version = uint8(data[0]);
-            if (version & 0x80 != 0) revert InvalidCashAddr(); // reserved bit
+            if (version & 0x80 != 0) return (false, 0, ""); // reserved bit
             uint256 size = _size(version & 7);
-            if (data.length != size + 1) revert InvalidCashAddr();
+            if (data.length != size + 1) return (false, 0, "");
             kind = version >> 3;
             hash = new bytes(size);
             for (uint256 i; i < size; ++i) {
                 hash[i] = data[i + 1];
             }
         }
+        ok = true;
     }
 
     function _size(uint256 code) private pure returns (uint256) {
@@ -134,11 +145,11 @@ library CashAddr {
         return code < 4 ? 20 + code * 4 : 40 + (code - 4) * 8;
     }
 
-    function _sizeCode(uint256 len) private pure returns (uint256) {
-        for (uint256 code; code < 8; ++code) {
-            if (_size(code) == len) return code;
+    /// @dev Returns 8 for an unsupported length.
+    function _sizeCode(uint256 len) private pure returns (uint256 code) {
+        for (; code < 8; ++code) {
+            if (_size(code) == len) break;
         }
-        revert InvalidCashAddr();
     }
 
     function _prefixChecksum(bytes memory prefix) private pure returns (uint256 chk) {
@@ -160,15 +171,12 @@ library CashAddr {
         return chk;
     }
 
-    /// @dev Lowercase char -> 5-bit value; reverts if not in the charset.
-    function _rev(uint256 c) private pure returns (uint256 w) {
+    /// @dev Lowercase char -> 5-bit value, or 32 if not in the charset.
+    function _rev(uint256 c) private pure returns (uint256) {
         unchecked {
-            uint256 idx;
-            if (c >= 0x30 && c <= 0x39) idx = c - 0x30;
-            else if (c >= 0x61 && c <= 0x7a) idx = c - 0x61 + 10;
-            else revert InvalidCashAddr();
-            w = (CHARSET_REV >> (idx * 6)) & 63;
-            if (w > 31) revert InvalidCashAddr();
+            if (c >= 0x30 && c <= 0x39) return (CHARSET_REV >> ((c - 0x30) * 6)) & 63;
+            if (c >= 0x61 && c <= 0x7a) return (CHARSET_REV >> ((c - 0x61 + 10) * 6)) & 63;
+            return 32;
         }
     }
 }

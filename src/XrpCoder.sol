@@ -13,8 +13,6 @@ import {Base58} from "./utils/Base58.sol";
 /// - Base58 encodings (XRP alphabet, type prefixes): https://xrpl.org/docs/references/protocol/data-types/base58-encodings
 /// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/coin/xrp.ts
 library XrpCoder {
-    error UnrecognisedAddressFormat();
-
     uint256 internal constant COIN_TYPE = 144;
 
     uint8 internal constant VERSION = 0x00;
@@ -31,10 +29,11 @@ library XrpCoder {
         return (true, Base58.encodeCheck(data, _alphabet()));
     }
 
-    /// @notice Address string -> 0x00 ‖ 20-byte account. Reverts on invalid input.
-    function decode(string memory addr) internal pure returns (bytes memory data) {
-        data = Base58.decodeCheck(addr, _alphabet());
-        if (data.length != 21 || uint8(data[0]) != VERSION) revert UnrecognisedAddressFormat();
+    /// @notice Address string -> 0x00 ‖ 20-byte account.
+    /// @return ok False if `addr` is not Base58Check of 21 bytes starting with VERSION.
+    function decode(string memory addr) internal pure returns (bool ok, bytes memory data) {
+        (ok, data) = Base58.decodeCheck(addr, _alphabet());
+        if (!ok || data.length != 21 || uint8(data[0]) != VERSION) return (false, "");
     }
 
     function _alphabet() private pure returns (Base58.Alphabet memory) {

@@ -16,13 +16,12 @@ import {Bech32} from "./Bech32.sol";
 /// - BIP-13 (P2SH addresses): https://github.com/bitcoin/bips/blob/master/bip-0013.mediawiki
 /// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/utils/bitcoin.ts
 library BitcoinLike {
-    error UnrecognisedAddressFormat();
-
     /// @notice Address string -> scriptPubKey bytes (Base58Check or SegWit).
+    /// @return ok False if `addr` is not a valid address for these parameters.
     function decode(string memory addr, bytes memory hrp, uint8 p2pkhVersion, uint8 p2shVersion)
         internal
         pure
-        returns (bytes memory)
+        returns (bool ok, bytes memory script)
     {
         return decode(addr, hrp, p2pkhVersion, p2shVersion, p2shVersion);
     }
@@ -31,12 +30,13 @@ library BitcoinLike {
     function decode(string memory addr, bytes memory hrp, uint8 p2pkhVersion, uint8 p2shVersion, uint8 p2shAltVersion)
         internal
         pure
-        returns (bytes memory)
+        returns (bool ok, bytes memory script)
     {
         if (_hasSegwitPrefix(bytes(addr), hrp)) {
-            (uint256 version, bytes memory program) = Bech32.decodeSegwit(hrp, addr);
+            (bool valid, uint256 version, bytes memory program) = Bech32.decodeSegwit(hrp, addr);
+            if (!valid) return (false, "");
             // OP_0 or OP_1..OP_16, then a direct push of the program.
-            return abi.encodePacked(uint8(version == 0 ? 0 : version + 0x50), uint8(program.length), program);
+            return (true, abi.encodePacked(uint8(version == 0 ? 0 : version + 0x50), uint8(program.length), program));
         }
         return decodeLegacy(addr, p2pkhVersion, p2shVersion, p2shAltVersion);
     }
@@ -51,22 +51,21 @@ library BitcoinLike {
         uint256 n = script.length;
         uint8 op = n == 0 ? 0xff : uint8(script[0]);
         if ((op == 0 || (op >= 0x51 && op <= 0x60)) && n >= 2 && uint8(script[1]) == n - 2) {
-            uint256 version = op == 0 ? 0 : op - 0x50;
-            if (!Bech32.isValidWitnessProgram(version, n - 2)) return (false, "");
             bytes memory program = new bytes(n - 2);
             for (uint256 i; i < n - 2; ++i) {
                 program[i] = script[i + 2];
             }
-            return (true, Bech32.encodeSegwit(hrp, version, program));
+            return Bech32.encodeSegwit(hrp, op == 0 ? 0 : op - 0x50, program);
         }
         return encodeLegacy(script, p2pkhVersion, p2shVersion);
     }
 
     /// @notice Base58Check P2PKH / P2SH address -> scriptPubKey bytes.
+    /// @return ok False if `addr` is not a valid address for these versions.
     function decodeLegacy(string memory addr, uint8 p2pkhVersion, uint8 p2shVersion)
         internal
         pure
-        returns (bytes memory)
+        returns (bool ok, bytes memory script)
     {
         return decodeLegacy(addr, p2pkhVersion, p2shVersion, p2shVersion);
     }
@@ -75,17 +74,17 @@ library BitcoinLike {
     function decodeLegacy(string memory addr, uint8 p2pkhVersion, uint8 p2shVersion, uint8 p2shAltVersion)
         internal
         pure
-        returns (bytes memory)
+        returns (bool ok, bytes memory script)
     {
-        bytes memory payload = Base58.decodeCheck(addr);
-        if (payload.length != 21) revert UnrecognisedAddressFormat();
+        (bool valid, bytes memory payload) = Base58.decodeCheck(addr);
+        if (!valid || payload.length != 21) return (false, "");
         uint8 v = uint8(payload[0]);
         bytes20 hash = _hash20(payload, 1);
         // OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG
-        if (v == p2pkhVersion) return abi.encodePacked(hex"76a914", hash, hex"88ac");
+        if (v == p2pkhVersion) return (true, abi.encodePacked(hex"76a914", hash, hex"88ac"));
         // OP_HASH160 <20> OP_EQUAL
-        if (v == p2shVersion || v == p2shAltVersion) return abi.encodePacked(hex"a914", hash, hex"87");
-        revert UnrecognisedAddressFormat();
+        if (v == p2shVersion || v == p2shAltVersion) return (true, abi.encodePacked(hex"a914", hash, hex"87"));
+        return (false, "");
     }
 
     /// @notice P2PKH / P2SH scriptPubKey bytes -> Base58Check address.

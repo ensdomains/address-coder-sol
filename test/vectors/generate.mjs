@@ -428,7 +428,7 @@ define('ada', {
   ],
 })
 
-// ------------------------------------------------------------------ eth / evm (ENSIP-11)
+// ------------------------------------------------------------------ eth / evm (ENSIP-19)
 
 const eth = getCoderByCoinName('eth')
 const ethAddr = eth.encode(p20)
@@ -450,8 +450,8 @@ for (const name of ['eth', 'op']) {
       ['non-hex char', ethAddr.slice(0, -1) + 'g'],
       ['empty', ''],
     ],
+    // Empty bytes encode as the zero address (encode-only; see test_eth_emptyIsZero).
     invalidBytes: [
-      ['empty', Buffer.alloc(0)],
       ['19 bytes', rnd(19)],
       ['21 bytes', rnd(21)],
       ['32 bytes', rnd(32)],

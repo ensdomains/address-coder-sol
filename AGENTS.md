@@ -11,7 +11,8 @@ Converts chain addresses to and from the bytes ENS stores in `addr(node, coinTyp
 ## Layout
 
 - `src/<Chain>Coder.sol`: one library per chain (see the README table). Each one exposes
-  `encode(bytes) → (bool ok, string addr)`, `decode(string) → bytes` and `COIN_TYPE`.
+  `encode(bytes) → (bool ok, string addr)`, `decode(string) → (bool ok, bytes data)` and `COIN_TYPE`
+  (`EvmCoder` has `COIN_TYPE_ETH` / `COIN_TYPE_DEFAULT`, per ENSIP-19).
 - `src/AddressCoder.sol`: opt-in dispatcher by coinType over every coder.
 - `src/utils/`: shared building blocks (`Base58`, `Base32`, `Bech32`, `BitcoinLike`, `CashAddr`, `Blake2b`, `SS58`).
 - `test/Coders.t.sol`: vector, decode-only, invalid-input and round-trip fuzz tests, run through a `Harness`
@@ -27,10 +28,11 @@ Converts chain addresses to and from the bytes ENS stores in `addr(node, coinTyp
 - One file per chain. Adding a chain shouldn't change the bytecode of contracts that use other coders.
 - Byte layout must match `@ensdomains/address-encoder` (the output of `decode`, the input of `encode`).
   Being stricter about validity is fine; document any difference in the README.
-- **`encode` never reverts.** Invalid bytes return `(false, "")`. Check everything that could make a
-  util revert (lengths, witness programs, bech32 length limits, precompile availability) before
-  calling it. `testFuzz_encodeNeverReverts*` enforces this for every coinType.
-- **`decode` reverts** with a custom error on invalid input.
+- **Nothing reverts, and there are no custom errors.** `encode` and `decode` return `(false, "")` on
+  invalid input, and so does every util that can fail. Internal library calls can't be wrapped in
+  `try`/`catch`, so a revert would leave callers no way to handle bad input. Don't index past a
+  length you haven't checked (a panic is a revert too). `testFuzz_encodeNeverReverts*` and
+  `testFuzz_decodeNeverReverts*` enforce this for every coinType.
 - Coders are `pure` unless they need a precompile (Polkadot/Kusama use the BLAKE2b precompile, so they're `view`).
 - If the reference has a bug, don't copy it. Write a vector that pins the correct behaviour, and record
   the difference in the README.

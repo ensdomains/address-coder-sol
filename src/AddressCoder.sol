@@ -24,12 +24,10 @@ import {ChiaCoder} from "./ChiaCoder.sol";
 ///
 /// References:
 /// - ENSIP-9 (multichain addresses): https://docs.ens.domains/ensip/9
-/// - ENSIP-11 (EVM chain coin types): https://docs.ens.domains/ensip/11
+/// - ENSIP-19 (EVM chain coin types): https://docs.ens.domains/ensip/19
 /// - SLIP-44 (coin types): https://github.com/satoshilabs/slips/blob/master/slip-0044.md
 /// - Reference: https://github.com/ensdomains/address-encoder/blob/main/src/index.ts
 library AddressCoder {
-    error UnsupportedCoinType(uint256 coinType);
-
     /// @notice Whether `coinType` has a coder.
     function isSupported(uint256 coinType) internal pure returns (bool) {
         return EvmCoder.isEvmCoinType(coinType) || coinType == BitcoinCoder.COIN_TYPE
@@ -62,8 +60,8 @@ library AddressCoder {
     }
 
     /// @notice Address string -> address bytes for `coinType`.
-    /// @dev Reverts with `UnsupportedCoinType` or the coder's error on invalid input.
-    function decode(uint256 coinType, string memory addr) internal view returns (bytes memory) {
+    /// @return ok False if `coinType` is unsupported or `addr` is not valid for it. Never reverts.
+    function decode(uint256 coinType, string memory addr) internal view returns (bool ok, bytes memory data) {
         if (EvmCoder.isEvmCoinType(coinType)) return EvmCoder.decode(addr);
         if (coinType == BitcoinCoder.COIN_TYPE) return BitcoinCoder.decode(addr);
         if (coinType == SolanaCoder.COIN_TYPE) return SolanaCoder.decode(addr);
@@ -78,6 +76,6 @@ library AddressCoder {
         if (coinType == KusamaCoder.COIN_TYPE) return KusamaCoder.decode(addr);
         if (coinType == CardanoCoder.COIN_TYPE) return CardanoCoder.decode(addr);
         if (coinType == ChiaCoder.COIN_TYPE) return ChiaCoder.decode(addr);
-        revert UnsupportedCoinType(coinType);
+        return (false, "");
     }
 }

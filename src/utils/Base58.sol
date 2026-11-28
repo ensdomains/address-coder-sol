@@ -15,9 +15,6 @@ pragma solidity ^0.8.24;
 /// - Base58Check: https://en.bitcoin.it/wiki/Base58Check_encoding
 /// - Base58 draft spec: https://datatracker.ietf.org/doc/html/draft-msporny-base58-03
 library Base58 {
-    error InvalidBase58Character(uint256 index);
-    error InvalidBase58Checksum();
-
     struct Alphabet {
         bytes32 lo;
         bytes32 hi;
@@ -46,7 +43,8 @@ library Base58 {
     }
 
     /// @notice Decode a base58 string (Bitcoin alphabet).
-    function decode(string memory s) internal pure returns (bytes memory) {
+    /// @return ok False if `s` has a character outside the alphabet.
+    function decode(string memory s) internal pure returns (bool ok, bytes memory data) {
         return decode(s, bitcoin());
     }
 
@@ -56,7 +54,8 @@ library Base58 {
     }
 
     /// @notice Decode a Base58Check string (Bitcoin alphabet), verifying and stripping the checksum.
-    function decodeCheck(string memory s) internal pure returns (bytes memory) {
+    /// @return ok False if `s` is not base58 or the checksum is wrong.
+    function decodeCheck(string memory s) internal pure returns (bool ok, bytes memory payload) {
         return decodeCheck(s, bitcoin());
     }
 
@@ -68,10 +67,11 @@ library Base58 {
     }
 
     /// @notice Decode a Base58Check string, verifying and stripping the 4-byte checksum.
-    function decodeCheck(string memory s, Alphabet memory a) internal pure returns (bytes memory payload) {
-        payload = decode(s, a);
+    /// @return ok False if `s` is not base58 or the checksum is wrong.
+    function decodeCheck(string memory s, Alphabet memory a) internal pure returns (bool ok, bytes memory payload) {
+        (ok, payload) = decode(s, a);
         uint256 n = payload.length;
-        if (n < 4) revert InvalidBase58Checksum();
+        if (!ok || n < 4) return (false, "");
         unchecked {
             n -= 4;
         }
@@ -80,7 +80,7 @@ library Base58 {
             checksum := and(mload(add(add(payload, 32), n)), shl(224, 0xffffffff))
             mstore(payload, n) // truncate in place
         }
-        if (bytes4(_sha256d(payload)) != checksum) revert InvalidBase58Checksum();
+        if (bytes4(_sha256d(payload)) != checksum) return (false, "");
     }
 
     /// @notice Encode `data` as base58.
@@ -139,7 +139,8 @@ library Base58 {
     }
 
     /// @notice Decode a base58 string.
-    function decode(string memory s, Alphabet memory a) internal pure returns (bytes memory out) {
+    /// @return ok False if `s` has a character outside the alphabet.
+    function decode(string memory s, Alphabet memory a) internal pure returns (bool ok, bytes memory out) {
         bytes memory b = bytes(s);
         unchecked {
             uint256 n = b.length;
@@ -161,7 +162,7 @@ library Base58 {
                 uint256 mul = 1;
                 for (; i < end; ++i) {
                     uint256 d = _digit(uint8(b[i]), revLo, revHi);
-                    if (d >= 58) revert InvalidBase58Character(i);
+                    if (d >= 58) return (false, "");
                     acc = acc * 58 + d;
                     mul *= 58;
                 }
@@ -191,6 +192,7 @@ library Base58 {
                 out[zeros + q] = bytes1(uint8(limbs[p >> 4] >> ((p & 15) << 3)));
             }
         }
+        ok = true;
     }
 
     function _sha256d(bytes memory data) private pure returns (bytes32) {
