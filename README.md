@@ -34,7 +34,7 @@ Neither function reverts (short of running out of gas). Invalid input returns `(
 contract can handle bad stored bytes or a bad user-supplied address without `try`/`catch`, which
 can't wrap `internal` library calls anyway. If you want a revert, add your own:
 `if (!ok) revert InvalidAddress();`. Coders whose input has a fixed size (Solana, Chia, Stellar, EVM)
-also offer an infallible `encode(bytes32)` / `encode(address)` that returns a plain `string`. Each
+also offer an infallible `encode(bytes32)` / `encode(address, checksum)` that returns a plain `string`. Each
 coder's NatSpec lists the specs it implements.
 
 ¹ Decode only: `encode` emits the canonical form (`M…` for LTC P2SH, `bitcoincash:…` for BCH). BCH
@@ -42,7 +42,9 @@ coder's NatSpec lists the specs it implements.
 ² `view`, not `pure`: the SS58 checksum uses the EIP-152 BLAKE2b precompile (`0x09`), which some
   L2s / zkEVMs don't implement. Where it's missing, `encode` and `decode` both return `false`.<br>
 ³ ENSIP-19 EVM chains, including the default coin type `0x80000000`. All of them use the same EIP-55
-  format as ETH, and empty bytes (no address set) encode as the zero address.
+  format as ETH. `EvmCoder` also has `encode(data, checksum)` / `encode(address, checksum)` (EIP-55 or
+  lowercase) and `decode(addr, checksum)`. With `checksum`, mixed-case input must be a valid EIP-55
+  checksum; without it, any case is accepted. The one-argument forms use `checksum = true`.
 
 ### `AddressCoder`
 
@@ -96,8 +98,7 @@ addresses:
 - **BTC / DOGE / TRX / XRP Base58Check:** payloads of the wrong length or with the wrong version byte.
 - **Chia:** addresses that don't decode to exactly 32 bytes.
 - **Cosmos:** empty account bytes.
-- **EVM:** only 20-byte inputs encode, plus empty bytes, which encode as the zero address. The
-  reference hex-encodes any length.
+- **EVM:** only 20-byte inputs encode. The reference hex-encodes any length.
 - **Stellar:** keys that aren't 32 bytes.
 - **Cardano:** Shelley addresses that aren't mainnet or that break CIP-19 lengths, reward addresses
   under the `addr` prefix, and Byron addresses whose inner bytes aren't a CBOR address (`0x83…`).

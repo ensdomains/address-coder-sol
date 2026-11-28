@@ -223,19 +223,10 @@ contract CodersTest is Test {
         assertFalse(AddressCoder.isSupported(uint256(type(uint32).max) + 1));
     }
 
-    function test_eth_emptyIsZero() public view {
-        (bool ok, string memory s) = EvmCoder.encode("");
-        assertTrue(ok);
-        assertEq(s, "0x0000000000000000000000000000000000000000");
-        (ok, s) = h.encode(EvmCoder.COIN_TYPE_DEFAULT, "");
-        assertTrue(ok);
-        assertEq(s, "0x0000000000000000000000000000000000000000");
-    }
-
     function test_eth_known() public pure {
         // EIP-55 test vector
         address a = 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed;
-        assertEq(EvmCoder.encode(a), "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed");
+        assertEq(EvmCoder.encode(a, true), "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed");
         {
             (bool dOk, bytes memory dOut) = EvmCoder.decode("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed");
             assertTrue(dOk);
@@ -246,6 +237,22 @@ contract CodersTest is Test {
             assertTrue(dOk);
             assertEq(dOut, abi.encodePacked(a));
         }
+        assertEq(EvmCoder.encode(a, false), "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed");
+        (bool ok, string memory lower) = EvmCoder.encode(abi.encodePacked(a), false);
+        assertTrue(ok);
+        assertEq(lower, "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed");
+
+        // A bad mixed-case checksum is rejected only with `checksum = true`.
+        string memory bad = "0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+        bytes memory d;
+        (ok, d) = EvmCoder.decode(bad, true);
+        assertFalse(ok);
+        assertEq(d, "");
+        (ok, d) = EvmCoder.decode(bad);
+        assertFalse(ok);
+        (ok, d) = EvmCoder.decode(bad, false);
+        assertTrue(ok);
+        assertEq(d, abi.encodePacked(a));
     }
 
     // ---------------------------------------------------------------- encode never reverts
@@ -254,7 +261,7 @@ contract CodersTest is Test {
     function testFuzz_encodeNeverReverts(uint256 pick, bytes memory data) public view {
         uint256 coinType = _coinType(pick);
         (bool ok, string memory s) = h.encode(coinType, data); // reverting fails the test
-        if (ok) assertEq(_decode(coinType, s), _expected(coinType, data));
+        if (ok) assertEq(_decode(coinType, s), data);
         else assertEq(s, "");
     }
 
@@ -269,7 +276,7 @@ contract CodersTest is Test {
         if (data.length > 1) data[1] = bytes1(b1);
         uint256 coinType = _coinType(pick);
         (bool ok, string memory s) = h.encode(coinType, data);
-        if (ok) assertEq(_decode(coinType, s), _expected(coinType, data));
+        if (ok) assertEq(_decode(coinType, s), data);
         else assertEq(s, "");
     }
 
@@ -579,7 +586,8 @@ contract CodersTest is Test {
     }
 
     function testFuzz_eth_roundtrip(address a, uint32 chainId) public pure {
-        string memory s = EvmCoder.encode(a);
+        string memory s = EvmCoder.encode(a, true);
+        assertEq(EvmCoder.encode(a, false), vm.toLowercase(s));
         {
             (bool dOk, bytes memory dOut) = EvmCoder.decode(s);
             assertTrue(dOk);
@@ -606,11 +614,6 @@ contract CodersTest is Test {
     }
 
     // ---------------------------------------------------------------- helpers
-
-    /// @dev What `data` decodes back to after encoding: EVM empty bytes encode as the zero address.
-    function _expected(uint256 coinType, bytes memory data) internal pure returns (bytes memory) {
-        return data.length == 0 && EvmCoder.isEvmCoinType(coinType) ? new bytes(20) : data;
-    }
 
     function _decode(uint256 coinType, string memory s) internal view returns (bytes memory data) {
         bool ok;

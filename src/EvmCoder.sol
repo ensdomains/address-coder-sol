@@ -4,9 +4,10 @@ pragma solidity ^0.8.24;
 /// @title EvmCoder
 /// @notice Ethereum (coinType 60) and EVM-chain (ENSIP-19, coinType 0x80000000 | chainId) address
 ///         <-> 20 bytes, as used by ENS `addr(node, coinType)`.
-/// @dev `encode` emits EIP-55 mixed-case checksummed hex; empty bytes (no address set) encode as the
-///      zero address. `decode` accepts "0x" + 40 hex digits that are all lowercase, all uppercase, or
-///      a valid EIP-55 checksum.
+/// @dev `encode(…, checksum)` emits EIP-55 mixed-case hex, or all lowercase. `decode(…, checksum)`
+///      accepts "0x" + 40 hex digits; with `checksum`, mixed-case input must be a valid EIP-55
+///      checksum (all-lowercase and all-uppercase carry no checksum, so they are accepted).
+///      The one-argument `encode` / `decode` use `checksum = true`, matching the reference.
 ///
 /// References:
 /// - EIP-55 (mixed-case checksum): https://eips.ethereum.org/EIPS/eip-55
@@ -27,16 +28,21 @@ library EvmCoder {
         return coinType == COIN_TYPE_ETH || (coinType >= COIN_TYPE_DEFAULT && coinType <= type(uint32).max);
     }
 
-    /// @notice 20 bytes -> EIP-55 checksummed "0x..." string. Empty bytes encode as the zero address.
-    /// @return ok False if `data` is neither 20 bytes nor empty.
+    /// @notice 20 bytes -> EIP-55 checksummed "0x..." string.
+    /// @return ok False if `data` is not 20 bytes.
     function encode(bytes memory data) internal pure returns (bool ok, string memory addr) {
-        if (data.length == 0) return (true, encode(address(0)));
-        if (data.length != 20) return (false, "");
-        return (true, encode(address(bytes20(data))));
+        return encode(data, true);
     }
 
-    /// @notice Address -> EIP-55 checksummed "0x..." string. Always succeeds.
-    function encode(address a) internal pure returns (string memory) {
+    /// @notice 20 bytes -> "0x..." string, EIP-55 checksummed if `checksum`, else lowercase.
+    /// @return ok False if `data` is not 20 bytes.
+    function encode(bytes memory data, bool checksum) internal pure returns (bool ok, string memory addr) {
+        if (data.length != 20) return (false, "");
+        return (true, encode(address(bytes20(data)), checksum));
+    }
+
+    /// @notice Address -> "0x..." string, EIP-55 checksummed if `checksum`, else lowercase. Always succeeds.
+    function encode(address a, bool checksum) internal pure returns (string memory) {
         bytes memory out = new bytes(42);
         out[0] = "0";
         out[1] = "x";
@@ -45,23 +51,33 @@ library EvmCoder {
             for (uint256 i; i < 40; ++i) {
                 out[2 + i] = HEX[(v >> (4 * (39 - i))) & 15];
             }
-            bytes32 h;
-            assembly ("memory-safe") {
-                h := keccak256(add(out, 34), 40)
-            }
-            for (uint256 i; i < 40; ++i) {
-                // Uppercase a-f where the matching hash nibble is >= 8.
-                if (uint8(out[2 + i]) > 0x39 && (uint256(h) >> (4 * (63 - i))) & 15 >= 8) {
-                    out[2 + i] = bytes1(uint8(out[2 + i]) - 0x20);
+            if (checksum) {
+                bytes32 h;
+                assembly ("memory-safe") {
+                    h := keccak256(add(out, 34), 40)
+                }
+                for (uint256 i; i < 40; ++i) {
+                    // Uppercase a-f where the matching hash nibble is >= 8.
+                    if (uint8(out[2 + i]) > 0x39 && (uint256(h) >> (4 * (63 - i))) & 15 >= 8) {
+                        out[2 + i] = bytes1(uint8(out[2 + i]) - 0x20);
+                    }
                 }
             }
         }
         return string(out);
     }
 
-    /// @notice "0x..." string -> 20 bytes.
+    /// @notice "0x..." string -> 20 bytes, checking the EIP-55 checksum of mixed-case input.
     /// @return ok False if `s` is not "0x" + 40 hex digits, or is mixed-case with a bad checksum.
     function decode(string memory s) internal pure returns (bool ok, bytes memory data) {
+        return decode(s, true);
+    }
+
+    /// @notice "0x..." string -> 20 bytes. Hex digits may be any case.
+    /// @param checksum If true, mixed-case input must be a valid EIP-55 checksum.
+    /// @return ok False if `s` is not "0x" + 40 hex digits, or (with `checksum`) is mixed-case with a
+    ///         bad checksum.
+    function decode(string memory s, bool checksum) internal pure returns (bool ok, bytes memory data) {
         bytes memory b = bytes(s);
         if (b.length != 42 || b[0] != "0" || b[1] != "x") return (false, "");
         uint256 v;
@@ -86,7 +102,7 @@ library EvmCoder {
             }
         }
         address a = address(uint160(v));
-        if (lower && upper && keccak256(bytes(encode(a))) != keccak256(b)) return (false, "");
+        if (checksum && lower && upper && keccak256(bytes(encode(a, true))) != keccak256(b)) return (false, "");
         return (true, abi.encodePacked(a));
     }
 }
